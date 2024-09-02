@@ -1,0 +1,47 @@
+import maya.cmds as cmds
+
+def create_curves_at_selected():
+    # Get the selected objects
+    selected_objects = cmds.ls(selection=True, type='transform')
+    
+    if not selected_objects:
+        cmds.warning("Select at least one object.")
+        return
+    
+    # Create a curve at each selected object's position
+    for obj in selected_objects:
+        # Clear the selection to avoid any parenting or selection issues
+        cmds.select(clear=True)
+        
+        # Get the world position and rotation of the object
+        pos = cmds.xform(obj, query=True, worldSpace=True, translation=True)
+        rot = cmds.xform(obj, query=True, worldSpace=True, rotation=True)
+        
+        # Create a curve at the origin (initially)
+        curve = cmds.circle(normal=(0, 1, 0), radius=1, name=obj + "_Ctrl")[0]
+        
+        # Move the curve to the object's position
+        cmds.xform(curve, worldSpace=True, translation=pos)
+        
+        # Rotate the curve to match the object's rotation (if needed)
+        cmds.xform(curve, worldSpace=True, rotation=rot)
+
+def create_ui():
+    # Check if the window exists, and if so, delete it
+    if cmds.window("curveCreationUI", exists=True):
+        cmds.deleteUI("curveCreationUI")
+    
+    # Create a new window
+    window = cmds.window("curveCreationUI", title="Curve Creation Tool", widthHeight=(200, 100))
+    
+    # Create a column layout
+    cmds.columnLayout(adjustableColumn=True)
+    
+    # Add a button that calls the create_curves_at_selected function
+    cmds.button(label="Create Curves at Selected", command=lambda *args: create_curves_at_selected())
+    
+    # Show the window
+    cmds.showWindow(window)
+
+# Run the UI
+create_ui()
