@@ -24,26 +24,14 @@ def matchTransforms():
         return
     cmds.MatchTransform(selection[0], selection[1], pos=True, rot=True, scl=True)
 
-def createControl():
-    selection = cmds.ls(selection=True)
-    if not selection:
-        cmds.error('Please select at least one object')
-        return
-    
-    for obj in selection:
-        cmds.select(obj)
-        cmds.CreateNURBSCircle()
-        cmds.move(0, 0, 0, relative=True)
-        cmds.rename('_ctrl_0')
-    
 def createGroup():
     selection = cmds.ls(selection=True)
     if selection:
-        cmds.group(selection, name='{}_grp'.format(selection[0]))
+        cmds.group(selection, name='{}_Grp'.format(selection[0]))
     else:
         selection = cmds.ls(selection=True)
         if selection:
-            cmds.group(selection, name='{}_grp'.format(selection[0]))
+            cmds.group(selection, name='{}_Grp'.format(selection[0]))
         cmds.error('Please select an object')
 
 
@@ -55,7 +43,6 @@ def createUI():
     cmds.button(label='Freeze Transforms', command='freezeTransforms()')
     cmds.button(label='Set Attributes to Zero', command='attributesSetZero()')
     cmds.button(label='Match Transforms', command='matchTransforms()')
-    cmds.button(label='Create Control', command= 'createControl()')
     cmds.button(label='Create Group', command='createGroup()')
     cmds.showWindow('matchTransformUI')
 
