@@ -1,0 +1,75 @@
+import maya.cmds as cmds
+
+def create_rk_switch_ui():
+    if cmds.window('rkSwitchUI', exists=True):
+        cmds.deleteUI('rkSwitchUI', window=True)
+    
+    cmds.window('rkSwitchUI', title='RK Switch UI', widthHeight=(250, 200), sizeable=False)
+    cmds.columnLayout(adjustableColumn=True)
+    cmds.floatSliderGrp('ikfkSwitchSlider', label='IKFK Switch', field=True, minValue=0, maxValue=1, value=0, step=0.1, cc='update_ikfk_switch()')
+    cmds.text(label='Select Limbs to Apply:')
+    cmds.checkBoxGrp('limbSelection', numberOfCheckBoxes=3, labelArray3=['Foot', 'Leg', 'Arm'], valueArray3=[True, True, True])
+    cmds.button(label='Apply RK Setup', command='create_rk_switch()')
+    cmds.showWindow('rkSwitchUI')
+
+def update_ikfk_switch():
+    control = "COG_Ctrl"
+    switch_attr = "RK_Switch"
+    ik_controls = cmds.ls('*_IK_CTRL')
+    fk_controls = cmds.ls('*_FK_CTRL')
+    
+    value = cmds.floatSliderGrp('ikfkSwitchSlider', query=True, value=True)
+    
+    if cmds.objExists(control):
+        cmds.setAttr(f"{control}.{switch_attr}", value)
+    
+    ik_visibility = 1 if value < 0.5 else 0
+    fk_visibility = 1 - ik_visibility
+    
+    for ctrl in ik_controls:
+        cmds.setAttr(f"{ctrl}.visibility", ik_visibility)
+    for ctrl in fk_controls:
+        cmds.setAttr(f"{ctrl}.visibility", fk_visibility)
+
+def create_rk_switch():
+    control = "COG_Ctrl"
+    switch_attr = "RK_Switch"
+    
+    if not cmds.objExists(control):
+        cmds.warning(f"Control {control} does not exist in the scene.")
+        return
+    
+    if not cmds.attributeQuery(switch_attr, node=control, exists=True):
+        cmds.addAttr(control, longName=switch_attr, attributeType='double', min=0, max=1, defaultValue=0, keyable=True)
+    
+    sides = ['L', 'R']
+    limbs = []
+    limb_selection = cmds.checkBoxGrp('limbSelection', query=True, valueArray3=True)
+    
+    if limb_selection[0]: limbs.append('Foot')
+    if limb_selection[1]: limbs.append('Leg')
+    if limb_selection[2]: limbs.append('Arm')
+    
+    systems = {'IK': 'IK', 'FK': 'FK', 'RK': 'RK'}
+    
+    for side in sides:
+        for limb in limbs:
+            ik_joints = cmds.ls(f"{side}_{limb}_{systems['IK']}_*_Jnt", type='joint')
+            fk_joints = cmds.ls(f"{side}_{limb}_{systems['FK']}_*_Jnt", type='joint')
+            rk_joints = cmds.ls(f"{side}_{limb}_{systems['RK']}_*_Jnt", type='joint')
+            
+            if not (ik_joints and fk_joints and rk_joints):
+                cmds.warning(f"Missing joints for {side} {limb}, skipping.")
+                continue
+            
+            for ik, fk, rk in zip(ik_joints, fk_joints, rk_joints):
+                constraint = cmds.parentConstraint(ik, fk, rk, mo=True)[0]
+                
+                cmds.connectAttr(f"{control}.{switch_attr}", f"{constraint}.w0")
+                rev_node = cmds.shadingNode('reverse', asUtility=True, name=f"{rk}_rev")
+                cmds.connectAttr(f"{control}.{switch_attr}", f"{rev_node}.inputX")
+                cmds.connectAttr(f"{rev_node}.outputX", f"{constraint}.w1")
+    
+    print("RK system setup complete.")
+
+create_rk_switch_ui()

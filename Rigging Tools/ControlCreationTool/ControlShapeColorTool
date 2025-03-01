@@ -1,79 +1,118 @@
 import maya.cmds as cmds
 
-def create_shape(curve, shape_type):
+def fit_control_cvs_to_mesh(control, mesh):
     """
-    Creates a specific shape and attaches it to the curve.
+    Adjusts the control's CVs to fit the bounding box of the given mesh while keeping the transform unchanged.
     """
-    if shape_type == 'circle':
-        cmds.circle(name=curve, normal=(0, 1, 0))
-    elif shape_type == 'rectangle':
-        cmds.curve(name=curve, d=1, p=[(-1, 0, -0.5), (-1, 0, 0.5), (1, 0, 0.5), (1, 0, -0.5), (-1, 0, -0.5)])
-    elif shape_type == 'square':
-        cmds.curve(name=curve, d=1, p=[(-1, 0, -1), (-1, 0, 1), (1, 0, 1), (1, 0, -1), (-1, 0, -1)])
-    elif shape_type == 'triangle':
-        cmds.curve(name=curve, d=1, p=[(0, 0, 1), (-1, 0, -1), (1, 0, -1), (0, 0, 1)])
-    elif shape_type == 'oval':
-        oval = cmds.circle(name=curve, normal=(0, 1, 0), radius=1, sections=12)
-        cmds.scale(2, 1, 1, oval)
-        cmds.makeIdentity(oval, apply=True, scale=True)
-    elif shape_type == 'star':
-        cmds.curve(name=curve, d=1, p=[(0, 0, 1), (0.2, 0, 0.2), (1, 0, 0.2), (0.3, 0, -0.1), (0.5, 0, -1),
-                                       (0, 0, -0.4), (-0.5, 0, -1), (-0.3, 0, -0.1), (-1, 0, 0.2), (-0.2, 0, 0.2), (0, 0, 1)])
-    elif shape_type == 'diamond':
-        cmds.curve(name=curve, d=1, p=[(0, 0, 1), (1, 0, 0), (0, 0, -1), (-1, 0, 0), (0, 0, 1)])
-
-def change_curve_shape_and_color(shape_type, color_index):
-    selected_curves = cmds.ls(selection=True, type='transform')
-
-    if not selected_curves:
-        cmds.warning("Select at least one curve object.")
+    if not cmds.objExists(control) or not cmds.objExists(mesh):
+        cmds.warning(f"Either {control} or {mesh} does not exist.")
         return
 
-    for curve in selected_curves:
-        # Clear the existing shape
-        children = cmds.listRelatives(curve, shapes=True)
-        if children:
-            cmds.delete(children)
+    # Get bounding box of the mesh
+    bbox = cmds.exactWorldBoundingBox(mesh)
+    min_x, min_y, min_z, max_x, max_y, max_z = bbox
+    width = (max_x - min_x) / 2
+    height = (max_y - min_y) / 2
+    depth = (max_z - min_z) / 2
 
-        # Create the new shapem
-        create_shape(curve, shape_type)
+    # Get shape node
+    shapes = cmds.listRelatives(control, shapes=True, type="nurbsCurve")
+    if not shapes:
+        cmds.warning(f"No shape found for {control}.")
+        return
 
-        # Set the color
-        shape_node = cmds.listRelatives(curve, shapes=True)[0]
-        cmds.setAttr(f"{shape_node}.overrideEnabled", 1)
-        cmds.setAttr(f"{shape_node}.overrideColor", color_index)
+    shape = shapes[0]
 
-def create_shape_and_color_ui():
-    # Check if the window exists, and if so, delete it
-    if cmds.window("shapeColorUI", exists=True):
-        cmds.deleteUI("shapeColorUI")
-    
-    # Create a new window
-    window = cmds.window("shapeColorUI", title="Curve Shape and Color Tool", widthHeight=(300, 150))
-    
-    # Create a column layout
+    # Get original CV positions
+    cvs = cmds.ls(f"{shape}.cv[*]", flatten=True)
+    original_cvs = [cmds.pointPosition(cv, world=True) for cv in cvs]
+
+    # Compute bounding box center
+    center_x = (min_x + max_x) / 2
+    center_y = (min_y + max_y) / 2
+    center_z = (min_z + max_z) / 2
+
+    # Scale CVs relative to their original positions
+    for i, cv in enumerate(cvs):
+        orig_x, orig_y, orig_z = original_cvs[i]
+
+        scaled_x = center_x + ((orig_x - center_x) * width)
+        scaled_y = center_y + ((orig_y - center_y) * height)
+        scaled_z = center_z + ((orig_z - center_z) * depth)
+
+        cmds.move(scaled_x, scaled_y, scaled_z, cv, absolute=True)
+
+def auto_fit_control_cvs():
+    """
+    Automatically adjusts control CVs to fit their respective meshes based on naming convention.
+    """
+    controls = cmds.ls("*_Ctrl")
+    for ctrl in controls:
+        mesh_name = ctrl.replace("_Ctrl", "_Geo")
+        if cmds.objExists(mesh_name):
+            fit_control_cvs_to_mesh(ctrl, mesh_name)
+
+def manual_fit_control_cvs():
+    """
+    Manually adjusts the selected control’s CVs to fit the selected mesh.
+    """
+    sel = cmds.ls(selection=True)
+    if len(sel) != 2:
+        cmds.warning("Select a control and a mesh.")
+        return
+    fit_control_cvs_to_mesh(sel[0], sel[1])
+
+def change_control_color(control, color_index):
+    """
+    Changes the color of the given control.
+    """
+    shapes = cmds.listRelatives(control, shapes=True, type="nurbsCurve")
+    if not shapes:
+        cmds.warning(f"No shape found for {control}.")
+        return
+
+    for shape in shapes:
+        cmds.setAttr(f"{shape}.overrideEnabled", 1)
+        cmds.setAttr(f"{shape}.overrideColor", color_index)
+
+def apply_color_to_selected():
+    """
+    Changes the color of selected controls.
+    """
+    sel = cmds.ls(selection=True, type="transform")
+    color_index = cmds.intSliderGrp("colorSlider", query=True, value=True)
+
+    if not sel:
+        cmds.warning("Select at least one control.")
+        return
+
+    for ctrl in sel:
+        change_control_color(ctrl, color_index)
+
+def create_ui():
+    """
+    Creates a UI for the control fitting and coloring tool.
+    """
+    if cmds.window("fitControlUI", exists=True):
+        cmds.deleteUI("fitControlUI")
+
+    window = cmds.window("fitControlUI", title="Control Shape & Color Tool", widthHeight=(350, 250))
     cmds.columnLayout(adjustableColumn=True)
-    
-    # Dropdown for shape selection
-    shape_option = cmds.optionMenu(label="Select Shape")
-    cmds.menuItem(label="circle")
-    cmds.menuItem(label="rectangle")
-    cmds.menuItem(label="square")
-    cmds.menuItem(label="triangle")
-    cmds.menuItem(label="oval")
-    cmds.menuItem(label="star")
-    cmds.menuItem(label="diamond")  # New diamond shape added
-    
-    # Slider for color selection
-    color_slider = cmds.intSliderGrp(label="Color Index", field=True, minValue=0, maxValue=31, value=17)
-    
-    # Button to apply shape and color changes
-    cmds.button(label="Apply Shape and Color", 
-                command=lambda *args: change_curve_shape_and_color(cmds.optionMenu(shape_option, query=True, value=True), 
-                                                         cmds.intSliderGrp(color_slider, query=True, value=True)))
-    
-    # Show the window
+
+    cmds.text(label="Instructions:\n1. Select a control and mesh, then press 'Manual Fit'.\n"
+                    "2. Use 'Auto-Fit' for all controls with matching meshes.\n"
+                    "3. Select controls and use the color slider to change their color.", align="left", wordWrap=True)
+
+    cmds.button(label="Manual Fit (Select Control & Mesh)", command=lambda *args: manual_fit_control_cvs())
+    cmds.button(label="Auto-Fit All Controls", command=lambda *args: auto_fit_control_cvs())
+
+    cmds.separator(height=10, style="in")
+
+    cmds.text(label="Control Color")
+    cmds.intSliderGrp("colorSlider", label="Color Index", field=True, minValue=0, maxValue=31, value=17)
+    cmds.button(label="Apply Color to Selected", command=lambda *args: apply_color_to_selected())
+
     cmds.showWindow(window)
 
-# Run the UI
-create_shape_and_color_ui()
+# Launch the UI
+create_ui()

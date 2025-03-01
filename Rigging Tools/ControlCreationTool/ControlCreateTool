@@ -1,46 +1,84 @@
 import maya.cmds as cmds
 
-def create_curves_at_selected():
-    # Get the selected objects
+def select_joints():
+    """ Selects all objects containing '_Jnt' or '_Jnt_' while excluding those with '_FK_', 'FK_', '_FK', '_IK_', 'IK_', '_IK'. """
+    all_objects = cmds.ls(transforms=True)
+    joints_to_select = []
+
+    for obj in all_objects:
+        if ("_Jnt" in obj or "_Jnt_" in obj) and not any(exclude in obj for exclude in ["_FK_", "FK_", "_FK", "_IK_", "IK_", "_IK"]):
+            joints_to_select.append(obj)
+
+    if joints_to_select:
+        cmds.select(joints_to_select)
+    else:
+        cmds.warning("No valid joints found matching the criteria.")
+
+def create_groups_at_selected():
     selected_objects = cmds.ls(selection=True, type='transform')
     
     if not selected_objects:
         cmds.warning("Select at least one object.")
         return
     
-    # Create a curve at each selected object's position
     for obj in selected_objects:
-        # Clear the selection to avoid any parenting or selection issues
-        cmds.select(clear=True)
-        
-        # Get the world position and rotation of the object
+        grp_name = obj + "_Ctrl_Grp"
+        if cmds.objExists(grp_name):
+            cmds.warning(f"Group {grp_name} already exists. Skipping.")
+            continue
+
         pos = cmds.xform(obj, query=True, worldSpace=True, translation=True)
-        rot = cmds.xform(obj, query=True, worldSpace=True, rotation=True)
+        grp = cmds.group(empty=True, name=grp_name)
+        cmds.xform(grp, worldSpace=True, translation=pos)
+
+def create_controls_at_selected():
+    selected_objects = cmds.ls(selection=True, type='transform')
+
+    if not selected_objects:
+        cmds.warning("Select at least one object.")
+        return
+    
+    for obj in selected_objects:
+        ctrl_name = obj + "_Ctrl"
+        grp_name = obj + "_Ctrl_Grp"
+
+        if cmds.objExists(ctrl_name):
+            cmds.warning(f"Control {ctrl_name} already exists. Skipping.")
+            continue
         
-        # Create a curve at the origin (initially)
-        curve = cmds.circle(normal=(0, 1, 0), radius=1, name=obj + "_Ctrl")[0]
-        
-        # Move the curve to the object's position
-        cmds.xform(curve, worldSpace=True, translation=pos)
-        
-        # Rotate the curve to match the object's rotation (if needed)
-        cmds.xform(curve, worldSpace=True, rotation=rot)
+        pos = cmds.xform(obj, query=True, worldSpace=True, translation=True)
+        ctrl = cmds.circle(name=ctrl_name, normal=(0, 1, 0), radius=1)[0]
+        cmds.xform(ctrl, worldSpace=True, translation=pos)
+
+        # Auto-parent control to its group if it exists
+        if cmds.objExists(grp_name):
+            cmds.parent(ctrl, grp_name)
+        else:
+            cmds.warning(f"Group {grp_name} does not exist. Control {ctrl_name} remains unparented.")
 
 def create_ui():
-    # Check if the window exists, and if so, delete it
-    if cmds.window("curveCreationUI", exists=True):
-        cmds.deleteUI("curveCreationUI")
+    if cmds.window("riggingToolUI", exists=True):
+        cmds.deleteUI("riggingToolUI")
     
-    # Create a new window
-    window = cmds.window("curveCreationUI", title="Curve Creation Tool", widthHeight=(200, 100))
+    window = cmds.window("riggingToolUI", title="Rigging Control Tool", widthHeight=(250, 200))
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
     
-    # Create a column layout
-    cmds.columnLayout(adjustableColumn=True)
-    
-    # Add a button that calls the create_curves_at_selected function
-    cmds.button(label="Create Curves at Selected", command=lambda *args: create_curves_at_selected())
-    
-    # Show the window
+    cmds.text(label="Step 1: Select Joints", align="center")
+    cmds.button(label="Select Joints (_Jnt, Exclude FK/IK)", command=lambda *args: select_joints())
+
+    cmds.separator(height=5, style="in")
+
+    cmds.text(label="Step 2: Create Groups", align="center")
+    cmds.button(label="Create Groups at Selected", command=lambda *args: create_groups_at_selected())
+
+    cmds.separator(height=5, style="in")
+
+    cmds.text(label="Step 3: Create Controls & Parent", align="center")
+    cmds.button(label="Create Controls at Selected", command=lambda *args: create_controls_at_selected())
+
+    cmds.separator(height=5, style="in")
+    cmds.button(label="Close", command=lambda *args: cmds.deleteUI(window))
+
     cmds.showWindow(window)
 
 # Run the UI

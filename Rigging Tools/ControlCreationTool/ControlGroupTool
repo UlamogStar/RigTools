@@ -1,0 +1,50 @@
+import maya.cmds as cmds
+
+def group_ctrl_grps_by_hierarchy():
+    """ Groups all control groups (_Ctrl_Grp) based on the original joint hierarchy. """
+    all_objects = cmds.ls(transforms=True)
+
+    # Filter control groups (_Ctrl_Grp) and organize them based on their hierarchy
+    ctrl_grp_dict = {}
+    
+    for obj in all_objects:
+        if obj.endswith("_Ctrl_Grp"):
+            base_name = obj.replace("_Ctrl_Grp", "")
+            
+            # Find the corresponding joint
+            parent_joint = cmds.listRelatives(base_name, parent=True)
+            
+            if parent_joint:
+                parent_ctrl_grp = parent_joint[0] + "_Ctrl_Grp"
+                
+                if cmds.objExists(parent_ctrl_grp):
+                    ctrl_grp_dict[obj] = parent_ctrl_grp
+
+    # Parent control groups to their respective parents
+    for child_grp, parent_grp in ctrl_grp_dict.items():
+        cmds.parent(child_grp, parent_grp)
+
+    cmds.inViewMessage(amg="Control Groups Nested Successfully!", pos="midCenter", fade=True)
+
+def create_ui():
+    """ Creates a UI for the tool. """
+    if cmds.window("groupCtrlGrpsUI", exists=True):
+        cmds.deleteUI("groupCtrlGrpsUI")
+    
+    window = cmds.window("groupCtrlGrpsUI", title="Group Control Groups", widthHeight=(300, 150), sizeable=False)
+
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=10)
+    cmds.text(label="Automatically Group Control Groups by Hierarchy", align="center")
+    
+    cmds.separator(height=10, style="in")
+    
+    cmds.button(label="Group Control Groups", command=lambda *args: group_ctrl_grps_by_hierarchy(), height=40, backgroundColor=(0.3, 0.6, 0.3))
+    
+    cmds.separator(height=10, style="in")
+    
+    cmds.button(label="Close", command=lambda *args: cmds.deleteUI(window), height=30)
+
+    cmds.showWindow(window)
+
+# Run the UI
+create_ui()
