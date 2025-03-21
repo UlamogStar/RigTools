@@ -1,0 +1,104 @@
+import maya.cmds as cmds
+
+
+
+def get_selected_anim_curves():
+    """Gets the currently selected animation curves in the Graph Editor."""
+    all_curves = cmds.keyframe(query=True, name=True, selected=True) or []
+    
+    # Get user-selected filters
+    include_translate = cmds.checkBox("includeTranslate", query=True, value=True)
+    include_rotate = cmds.checkBox("includeRotate", query=True, value=True)
+    include_scale = cmds.checkBox("includeScale", query=True, value=True)
+    include_visibility = cmds.checkBox("includeVisibility", query=True, value=True)
+
+    # Define valid suffixes for each type
+    translate_keys = {"translateX", "translateY", "translateZ"}
+    rotate_keys = {"rotateX", "rotateY", "rotateZ"}
+    scale_keys = {"scaleX", "scaleY", "scaleZ"}
+    visibility_keys = {"visibility"}
+
+    # Filter based on the checkboxes
+    filtered_curves = []
+    for curve in all_curves:
+        if include_translate and any(suffix in curve for suffix in translate_keys):
+            filtered_curves.append(curve)
+        elif include_rotate and any(suffix in curve for suffix in rotate_keys):
+            filtered_curves.append(curve)
+        elif include_scale and any(suffix in curve for suffix in scale_keys):
+            filtered_curves.append(curve)
+        elif include_visibility and "visibility" in curve:
+            filtered_curves.append(curve)
+
+    return list(set(filtered_curves))  # Remove duplicates
+
+def mirror_selected_keys():
+    """Mirrors the selected animation keys' values while keeping their timing."""
+    anim_curves = get_selected_anim_curves()
+    if not anim_curves:
+        cmds.warning("No valid keys selected in the Graph Editor!")
+        return
+
+    time_offset = cmds.floatField("timeOffsetField", query=True, value=True)
+
+    for curve in anim_curves:
+        keys = cmds.keyframe(curve, query=True, timeChange=True, selected=True)
+        values = cmds.keyframe(curve, query=True, valueChange=True, selected=True)
+
+        if keys:
+            for i in range(len(keys)):
+                new_value = -values[i]  # Mirror value
+                new_time = keys[i] + time_offset
+                cmds.setKeyframe(curve, time=(new_time,), value=new_value)
+
+    print("Mirrored selected animation keys.")
+
+def reverse_selected_keys():
+    """Reverses the order of selected animation keys while keeping values intact."""
+    anim_curves = get_selected_anim_curves()
+    if not anim_curves:
+        cmds.warning("No valid keys selected in the Graph Editor!")
+        return
+
+    time_offset = cmds.floatField("timeOffsetField", query=True, value=True)
+
+    for curve in anim_curves:
+        keys = cmds.keyframe(curve, query=True, timeChange=True, selected=True)
+        values = cmds.keyframe(curve, query=True, valueChange=True, selected=True)
+
+        if keys:
+            min_time, max_time = min(keys), max(keys)
+            
+            for i in range(len(keys)):
+                new_time = max_time - (keys[i] - min_time) + time_offset
+                cmds.setKeyframe(curve, time=(new_time,), value=values[i])
+
+    print("Reversed selected animation keys.")
+
+def create_ui():
+    """Creates the UI for the animation tool."""
+    if cmds.window("MirrorReverseAnimWin", exists=True):
+        cmds.deleteUI("MirrorReverseAnimWin")
+
+    cmds.window("MirrorReverseAnimWin", title="Mirror & Reverse Animation", widthHeight=(250, 200))
+    cmds.columnLayout(adjustableColumn=True)
+
+    cmds.text(label="Key Type Filters:")
+    cmds.checkBox("includeTranslate", label="Include Translate", value=True)
+    cmds.checkBox("includeRotate", label="Include Rotate", value=True)
+    cmds.checkBox("includeScale", label="Include Scale", value=False)  # Default: Disabled
+    cmds.checkBox("includeVisibility", label="Include Visibility", value=True)
+
+    cmds.separator(height=10)
+    
+    cmds.text(label="Time Offset:")
+    cmds.floatField("timeOffsetField", minValue=-1000, maxValue=1000, value=0, step=1, precision=2)
+
+    cmds.separator(height=10)
+
+    cmds.button(label="Mirror Selected Keys", command=lambda _: mirror_selected_keys())
+    cmds.button(label="Reverse Selected Keys", command=lambda _: reverse_selected_keys())
+
+    cmds.showWindow("MirrorReverseAnimWin")
+# Run UI
+create_ui()
