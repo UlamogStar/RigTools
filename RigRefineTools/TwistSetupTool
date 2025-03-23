@@ -1,0 +1,59 @@
+import maya.cmds as cmds
+
+def create_twist_joints(rk_joints, twist_factor=0.5):
+    """
+    Automates the creation of a twist system for RK joints without parenting them directly.
+    
+    Parameters:
+    - rk_joints: List of RK joints in the chain.
+    - twist_factor: The percentage of rotation applied to the twist joint (default 0.5).
+    """
+
+    twist_joints = []
+
+    for i in range(len(rk_joints) - 1):
+        parent_jnt = rk_joints[i]
+        child_jnt = rk_joints[i + 1]
+
+        # Get midpoint position
+        parent_pos = cmds.xform(parent_jnt, q=True, ws=True, t=True)
+        child_pos = cmds.xform(child_jnt, q=True, ws=True, t=True)
+        mid_pos = [(p + c) / 2.0 for p, c in zip(parent_pos, child_pos)]
+
+        # Naming
+        base_name = parent_jnt.replace("_Jnt", "")
+        twist_jnt = f"{base_name}_Twist_Jnt"
+        helper_locator = f"{base_name}_Twist_Helper"
+
+        # Create the twist joint at the midpoint
+        twist = cmds.duplicate(parent_jnt, name=twist_jnt, po=True)[0]
+        cmds.xform(twist, ws=True, t=mid_pos)
+
+        # Create a helper locator at the same position
+        helper = cmds.spaceLocator(name=helper_locator)[0]
+        cmds.xform(helper, ws=True, t=mid_pos)
+
+        # Constrain the twist joint to follow the arm rotation while staying in place
+        cmds.pointConstraint(parent_jnt, child_jnt, twist, mo=True)  # Maintain position
+        cmds.orientConstraint(parent_jnt, twist, mo=True)  # Follow the parent rotation
+
+        # Create multiplyDivide node for adjustable twist influence
+        mult_node = cmds.shadingNode("multiplyDivide", asUtility=True, name=twist_jnt + "_Mult")
+        cmds.setAttr(mult_node + ".input2X", twist_factor)  # Set rotation influence
+
+        # Connect parent joint's rotation to the multiplyDivide node
+        cmds.connectAttr(parent_jnt + ".rotateX", mult_node + ".input1X")
+        cmds.connectAttr(mult_node + ".outputX", twist + ".rotateX")
+
+        twist_joints.append(twist)
+
+        print(f"Created: {twist} at midpoint between {parent_jnt} and {child_jnt}")
+
+    return twist_joints
+
+# Example usage: Select RK joints and run the script
+selected_joints = cmds.ls(selection=True)
+if selected_joints:
+    create_twist_joints(selected_joints, twist_factor=0.7)  # Adjust twist factor as needed
+else:
+    cmds.warning("Select RK joints before running the script.")
