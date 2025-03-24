@@ -1,0 +1,40 @@
+import maya.cmds as cmds
+import os
+import shutil
+
+def save_maya_preferences(destination_folder):
+    """
+    Copies the Maya preference folder to a specified destination folder.
+
+    Args:
+        destination_folder (str): The folder where the preferences will be saved.
+    """
+    # Get the Maya preference folder path
+    maya_prefs_folder = os.path.join(cmds.internalVar(userAppDir=True), "prefs")
+    
+    if not os.path.exists(maya_prefs_folder):
+        cmds.warning("Maya preference folder not found.")
+        return
+
+    # Ensure the destination folder exists
+    if not os.path.exists(destination_folder):
+        os.makedirs(destination_folder)
+
+    # Define the destination path for the preferences
+    destination_path = os.path.join(destination_folder, "maya_prefs_backup")
+
+    # Copy the preferences folder
+    try:
+        if os.path.exists(destination_path):
+            shutil.rmtree(destination_path)  # Remove existing backup if it exists
+        shutil.copytree(maya_prefs_folder, destination_path)
+        cmds.confirmDialog(title="Success", message="Maya preferences saved successfully!", button=["OK"])
+    except Exception as e:
+        cmds.warning(f"Failed to save Maya preferences: {e}")
+
+# Example usage
+if __name__ == "__main__":
+    rigtools_folder = os.path.dirname(__file__)  # Use the current script's directory
+    save_maya_preferences(rigtools_folder)
+
+
