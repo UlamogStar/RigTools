@@ -1,0 +1,49 @@
+import maya.cmds as cmds
+import os
+
+def update_texture_paths(new_path):
+    if not os.path.exists(new_path):
+        cmds.warning("The selected path does not exist.")
+        return
+    
+    file_nodes = cmds.ls(type='file')
+    updated = 0
+
+    for node in file_nodes:
+        current_path = cmds.getAttr(node + ".fileTextureName")
+        if not os.path.exists(current_path):
+            # Extract the file name
+            file_name = os.path.basename(current_path)
+            new_full_path = os.path.join(new_path, file_name)
+            if os.path.exists(new_full_path):
+                cmds.setAttr(node + ".fileTextureName", new_full_path, type="string")
+                print(f"Updated {node} to {new_full_path}")
+                updated += 1
+            else:
+                print(f"Texture {file_name} not found in {new_path}")
+    
+    cmds.confirmDialog(title='Done', message=f'Updated {updated} textures.', button=['OK'])
+
+# MEL UI wrapper
+def open_texture_path_ui():
+    if cmds.window("texturePathWindow", exists=True):
+        cmds.deleteUI("texturePathWindow")
+    
+    window = cmds.window("texturePathWindow", title="Fix Texture Paths", widthHeight=(400, 100))
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=10)
+    
+    path_field = cmds.textFieldButtonGrp("pathField", label='New Texture Folder', buttonLabel='Browse',
+                                         buttonCommand=lambda *args: browse_and_set_path())
+    
+    cmds.button(label="Update Texture Paths", command=lambda *args: update_texture_paths(
+        cmds.textFieldButtonGrp("pathField", query=True, text=True)))
+    
+    cmds.showWindow(window)
+
+def browse_and_set_path():
+    new_path = cmds.fileDialog2(fm=3, dialogStyle=2)
+    if new_path:
+        cmds.textFieldButtonGrp("pathField", edit=True, text=new_path[0])
+
+# Run the UI
+open_texture_path_ui()
