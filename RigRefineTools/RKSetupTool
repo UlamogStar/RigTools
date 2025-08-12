@@ -1,75 +1,149 @@
 import maya.cmds as cmds
+import re
 
-def create_rk_switch_ui():
-    if cmds.window('rkSwitchUI', exists=True):
-        cmds.deleteUI('rkSwitchUI', window=True)
-    
-    cmds.window('rkSwitchUI', title='RK Switch UI', widthHeight=(250, 200), sizeable=False)
-    cmds.columnLayout(adjustableColumn=True)
-    cmds.floatSliderGrp('ikfkSwitchSlider', label='IKFK Switch', field=True, minValue=0, maxValue=1, value=0, step=0.1, cc='update_ikfk_switch()')
-    cmds.text(label='Select Limbs to Apply:')
-    cmds.checkBoxGrp('limbSelection', numberOfCheckBoxes=3, labelArray3=['Foot', 'Leg', 'Arm'], valueArray3=[True, True, True])
-    cmds.button(label='Apply RK Setup', command='create_rk_switch()')
-    cmds.showWindow('rkSwitchUI')
+CONTROL = "COG_Ctrl"
+SWITCH_ATTR = "RK_Switch"
+WIN = 'rkSwitchUI'
+
+def ensure_switch_attr():
+    if not cmds.objExists(CONTROL):
+        cmds.warning("Control {} does not exist.".format(CONTROL))
+        return False
+    if not cmds.attributeQuery(SWITCH_ATTR, node=CONTROL, exists=True):
+        cmds.addAttr(CONTROL, longName=SWITCH_ATTR, attributeType='double', min=0, max=1, defaultValue=0, keyable=True)
+    return True
+
+def _weight_connect(constraint, rk):
+    # Connect CONTROL.RK_Switch -> w0 and reverse -> w1 (matches your existing logic)
+    try:
+        cmds.connectAttr("{}.{}".format(CONTROL, SWITCH_ATTR), "{}.w0".format(constraint), f=True)
+    except:
+        pass
+    rev_name = "{}_rev".format(rk)
+    if not cmds.objExists(rev_name):
+        rev_name = cmds.shadingNode('reverse', asUtility=True, name=rev_name)
+    cmds.connectAttr("{}.{}".format(CONTROL, SWITCH_ATTR), "{}.inputX".format(rev_name), f=True)
+    try:
+        cmds.connectAttr("{}.outputX".format(rev_name), "{}.w1".format(constraint), f=True)
+    except:
+        pass
+
+def _apply_parent_constraint(ik, fk, rk, maintain_offset=True):
+    if not (cmds.objExists(ik) and cmds.objExists(fk) and cmds.objExists(rk)):
+        cmds.warning("Missing node(s) IK:{} FK:{} RK:{}".format(ik, fk, rk))
+        return
+    # Avoid duplicating constraints on the RK joint
+    existing = [c for c in (cmds.listRelatives(rk, type='parentConstraint') or [])]
+    if existing:
+        cmds.delete(existing)
+    cns = cmds.parentConstraint(ik, fk, rk, mo=maintain_offset)[0]
+    _weight_connect(cns, rk)
+
+def _derive_pair_names_from_rk(rk_name):
+    # Try common patterns:
+    # 1) L_Arm_RK_Jnt_01  -> L_Arm_IK_Jnt_01 / L_Arm_FK_Jnt_01
+    # 2) L_Arm_RK_*_Jnt   -> L_Arm_IK_*_Jnt / L_Arm_FK_*_Jnt
+    ik = None
+    fk = None
+    # Replace first _RK_ occurrence
+    if "_RK_" in rk_name:
+        ik_try = rk_name.replace("_RK_", "_IK_")
+        fk_try = rk_name.replace("_RK_", "_FK_")
+        if cmds.objExists(ik_try): ik = ik_try
+        if cmds.objExists(fk_try): fk = fk_try
+    # Fallback: replace trailing _RK before _Jnt
+    if ik is None or fk is None:
+        ik_try = re.sub(r"_RK(?=(_|$))", "_IK", rk_name, count=1)
+        fk_try = re.sub(r"_RK(?=(_|$))", "_FK", rk_name, count=1)
+        if ik is None and cmds.objExists(ik_try): ik = ik_try
+        if fk is None and cmds.objExists(fk_try): fk = fk_try
+    return ik, fk
+
+def _gather_all_rk_triplets():
+    rk_joints = set(cmds.ls("*_RK_*_Jnt*", type='joint') or [])
+    rk_joints.update(cmds.ls("*_RK_Jnt*", type='joint') or [])
+    triplets = []
+    for rk in sorted(rk_joints):
+        ik, fk = _derive_pair_names_from_rk(rk)
+        if ik and fk:
+            triplets.append((ik, fk, rk))
+        else:
+            cmds.warning("Could not find IK/FK matches for RK: {}".format(rk))
+    return triplets
 
 def update_ikfk_switch():
-    control = "COG_Ctrl"
-    switch_attr = "RK_Switch"
+    value = cmds.floatSliderGrp('ikfkSwitchSlider', query=True, value=True)
+    if cmds.objExists(CONTROL):
+        cmds.setAttr("{}.{}".format(CONTROL, SWITCH_ATTR), value)
+
     ik_controls = cmds.ls('*_IK_CTRL')
     fk_controls = cmds.ls('*_FK_CTRL')
-    
-    value = cmds.floatSliderGrp('ikfkSwitchSlider', query=True, value=True)
-    
-    if cmds.objExists(control):
-        cmds.setAttr(f"{control}.{switch_attr}", value)
-    
     ik_visibility = 1 if value < 0.5 else 0
     fk_visibility = 1 - ik_visibility
-    
     for ctrl in ik_controls:
-        cmds.setAttr(f"{ctrl}.visibility", ik_visibility)
+        if cmds.objExists(ctrl): cmds.setAttr(ctrl + ".visibility", ik_visibility)
     for ctrl in fk_controls:
-        cmds.setAttr(f"{ctrl}.visibility", fk_visibility)
+        if cmds.objExists(ctrl): cmds.setAttr(ctrl + ".visibility", fk_visibility)
 
-def create_rk_switch():
-    control = "COG_Ctrl"
-    switch_attr = "RK_Switch"
-    
-    if not cmds.objExists(control):
-        cmds.warning(f"Control {control} does not exist in the scene.")
-        return
-    
-    if not cmds.attributeQuery(switch_attr, node=control, exists=True):
-        cmds.addAttr(control, longName=switch_attr, attributeType='double', min=0, max=1, defaultValue=0, keyable=True)
-    
+def _apply_by_sides_limbs(maintain_offset=True):
     sides = ['L', 'R']
-    limbs = []
     limb_selection = cmds.checkBoxGrp('limbSelection', query=True, valueArray3=True)
-    
+    limbs = []
     if limb_selection[0]: limbs.append('Foot')
     if limb_selection[1]: limbs.append('Leg')
     if limb_selection[2]: limbs.append('Arm')
-    
     systems = {'IK': 'IK', 'FK': 'FK', 'RK': 'RK'}
-    
+
     for side in sides:
         for limb in limbs:
             ik_joints = cmds.ls(f"{side}_{limb}_{systems['IK']}_*_Jnt", type='joint')
             fk_joints = cmds.ls(f"{side}_{limb}_{systems['FK']}_*_Jnt", type='joint')
             rk_joints = cmds.ls(f"{side}_{limb}_{systems['RK']}_*_Jnt", type='joint')
-            
             if not (ik_joints and fk_joints and rk_joints):
                 cmds.warning(f"Missing joints for {side} {limb}, skipping.")
                 continue
-            
             for ik, fk, rk in zip(ik_joints, fk_joints, rk_joints):
-                constraint = cmds.parentConstraint(ik, fk, rk, mo=True)[0]
-                
-                cmds.connectAttr(f"{control}.{switch_attr}", f"{constraint}.w0")
-                rev_node = cmds.shadingNode('reverse', asUtility=True, name=f"{rk}_rev")
-                cmds.connectAttr(f"{control}.{switch_attr}", f"{rev_node}.inputX")
-                cmds.connectAttr(f"{rev_node}.outputX", f"{constraint}.w1")
-    
+                _apply_parent_constraint(ik, fk, rk, maintain_offset)
+
+def _apply_by_auto_match(maintain_offset=True):
+    triplets = _gather_all_rk_triplets()
+    for ik, fk, rk in triplets:
+        _apply_parent_constraint(ik, fk, rk, maintain_offset)
+
+def create_rk_switch():
+    if not ensure_switch_attr():
+        return
+    maintain_offset = cmds.checkBox('rk_mo', q=True, v=True)
+    auto_match = cmds.checkBox('rk_auto', q=True, v=True)
+    if auto_match:
+        _apply_by_auto_match(maintain_offset)
+    else:
+        _apply_by_sides_limbs(maintain_offset)
     print("RK system setup complete.")
+
+def create_rk_switch_ui():
+    if cmds.window(WIN, exists=True):
+        cmds.deleteUI(WIN, window=True)
+    cmds.window(WIN, title='RK Switch UI', widthHeight=(300, 240), sizeable=False)
+    cmds.columnLayout(adjustableColumn=True)
+
+    cmds.floatSliderGrp('ikfkSwitchSlider', label='IKFK Switch', field=True,
+                        minValue=0, maxValue=1, value=0, step=0.1, cc='update_ikfk_switch()')
+
+    cmds.separator(h=6, style='none')
+    cmds.text(label='Apply Mode:')
+
+    cmds.checkBox('rk_auto', label='Auto-match all RK by name (replace _RK_ -> _IK_/_FK_)', v=True)
+    cmds.checkBox('rk_mo', label='Maintain Offset', v=True)
+
+    cmds.frameLayout(label='Manual (sides/limbs) when Auto-match is OFF', collapsable=True, collapse=False, mw=6, mh=6)
+    cmds.checkBoxGrp('limbSelection', numberOfCheckBoxes=3,
+                     labelArray3=['Foot', 'Leg', 'Arm'], valueArray3=[True, True, True])
+    cmds.setParent('..')
+
+    cmds.separator(h=6, style='none')
+    cmds.button(label='Apply RK Setup', command='create_rk_switch()')
+
+    cmds.showWindow(WIN)
 
 create_rk_switch_ui()
