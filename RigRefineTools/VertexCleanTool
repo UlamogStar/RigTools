@@ -1,0 +1,119 @@
+# Standalone Maya tool: finds and deletes all loose vertices (vertices not part of any face)
+import maya.cmds as cmds
+import maya.mel as mel
+
+WINDOW_NAME = "vc_looseVertexCleaner_win"
+
+
+def find_all_loose_vertices():
+    """
+    Return dict: {transformName: [transformName.vtx[i], ...], ...}
+    - Query connectivity using the mesh shape node (shape.vtx[index]).
+    - Return component strings prefixed with the transform parent so selection/delete works.
+    """
+    result = {}
+    mesh_shapes = cmds.ls(type="mesh", long=True) or []
+    for shape in mesh_shapes:
+        # skip intermediate shapes
+        try:
+            if cmds.getAttr(shape + ".intermediateObject"):
+                continue
+        except Exception:
+            continue
+
+        parents = cmds.listRelatives(shape, parent=True, fullPath=True) or []
+        if not parents:
+            continue
+
+        try:
+            vcount = cmds.polyEvaluate(shape, v=True)
+        except Exception:
+            continue
+
+        for i in range(vcount):
+            shape_comp = "{}.vtx[{}]".format(shape, i)
+            faces = cmds.polyListComponentConversion(shape_comp, fromVertex=True, toFace=True) or []
+            faces = cmds.ls(faces, flatten=True) or []
+            if not faces:
+                # add a transform-prefixed component for each parent (handles instancing)
+                for p in parents:
+                    result.setdefault(p, []).append("{}.vtx[{}]".format(p, i))
+
+    return result
+
+
+def delete_loose_vertices(show_report=True):
+    """
+    Delete all found loose vertices.
+    Returns number deleted.
+    """
+    found = find_all_loose_vertices()
+    flat = [c for comps in found.values() for c in comps]
+    if not flat:
+        if show_report:
+            cmds.confirmDialog(title="Loose Vertices", message="No loose vertices found.", button=["OK"])
+        return 0
+
+    deleted = 0
+    # Try direct delete first
+    try:
+        cmds.delete(flat)
+        deleted = len(flat)
+    except Exception:
+        # Try selecting then deleting per-owner
+        for owner, comps in found.items():
+            try:
+                cmds.select(comps, r=True)
+                cmds.delete()
+                deleted += len(comps)
+            except Exception:
+                # Fallback to MEL doDelete (uses -r -sym like user requested)
+                try:
+                    comps_str = " ".join(comps)
+                    mel.eval('select -r -sym {0}; doDelete;'.format(comps_str))
+                    deleted += len(comps)
+                except Exception:
+                    cmds.warning("Failed to delete components on {}".format(owner))
+
+    if show_report:
+        cmds.confirmDialog(title="Loose Vertices", message="Deleted {} loose vertex(es).".format(deleted), button=["OK"])
+    return deleted
+
+
+def report_loose_vertices():
+    found = find_all_loose_vertices()
+    if not found:
+        cmds.confirmDialog(title="Loose Vertices", message="No loose vertices found.", button=["OK"])
+        return
+    lines = []
+    total = 0
+    for owner, comps in sorted(found.items()):
+        lines.append("{} : {} verts".format(owner, len(comps)))
+        total += len(comps)
+    message = "Found {} loose vertex(es):\n\n{}".format(total, "\n".join(lines))
+    cmds.confirmDialog(title="Loose Vertices", message=message, button=["OK"])
+
+
+def build_ui():
+    if cmds.window(WINDOW_NAME, exists=True):
+        cmds.deleteUI(WINDOW_NAME)
+    win = cmds.window(WINDOW_NAME, title="Loose Vertex Cleaner", widthHeight=(360, 160))
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=6, columnAlign="center", parent=win)
+    cmds.text(label="Deletes vertices that are not part of any face (loose vertices).", align="center")
+    cmds.separator(height=8)
+    cmds.rowLayout(numberOfColumns=2, columnWidth2=(220, 120), columnAlign2=("left", "right"))
+    cmds.button(label="Find and Delete All Loose Vertices", height=36, command=lambda *a: delete_loose_vertices(show_report=True))
+    cmds.button(label="Find (report only)", height=36, command=lambda *a: report_loose_vertices())
+    cmds.setParent("..")
+    cmds.separator(height=6)
+    cmds.button(label="Close", height=24, command=lambda *a: cmds.deleteUI(win))
+    cmds.showWindow(win)
+
+
+# Run UI in Maya
+if __name__ == "__main__":
+    build_ui()
+
+# Usage:
+# Paste this file into Maya's Script Editor (Python tab) or save as a module and import.
+# Run build_ui() to open the window, or call delete_loose_vertices() directly.

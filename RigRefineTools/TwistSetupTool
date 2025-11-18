@@ -1,55 +1,112 @@
 import maya.cmds as cmds
 
-def create_twist_joints(rk_joints, twist_factor=0.5):
+def create_twist_joints(rk_joints, twist_factor=0.5, axis='X', create_helpers=True, suffix="_Twist_Jnt", helper_suffix="_Twist_Helper"):
     """
-    Automates the creation of a twist system for RK joints without parenting them directly.
-    
+    Automates the creation of a twist system for RK joints.
     Parameters:
-    - rk_joints: List of RK joints in the chain.
-    - twist_factor: The percentage of rotation applied to the twist joint (default 0.5).
+    - rk_joints: List of RK joints in the chain (ordered).
+    - twist_factor: The percentage of rotation applied to the twist joint (0..1 typical).
+    - axis: 'X'|'Y'|'Z' rotation axis to drive.
+    - create_helpers: create locators for organization/debugging.
+    - suffix/helper_suffix: naming suffixes for created nodes.
+    Returns list of created twist joints.
     """
+    if not rk_joints or len(rk_joints) < 2:
+        cmds.warning("Select at least two RK joints in order.")
+        return []
 
-    twist_joints = []
+    axis = axis.upper()
+    if axis not in ('X', 'Y', 'Z'):
+        axis = 'X'
 
-    for i in range(len(rk_joints) - 1):
-        parent_jnt = rk_joints[i]
-        child_jnt = rk_joints[i + 1]
+    created = []
+    # Save and restore selection to avoid side effects
+    prev_sel = cmds.ls(selection=True, long=True) or []
+    try:
+        for i in range(len(rk_joints) - 1):
+            parent_jnt = rk_joints[i]
+            child_jnt = rk_joints[i + 1]
 
-        # Get midpoint position
-        parent_pos = cmds.xform(parent_jnt, q=True, ws=True, t=True)
-        child_pos = cmds.xform(child_jnt, q=True, ws=True, t=True)
-        mid_pos = [(p + c) / 2.0 for p, c in zip(parent_pos, child_pos)]
+            # Get midpoint position
+            parent_pos = cmds.xform(parent_jnt, q=True, ws=True, t=True)
+            child_pos = cmds.xform(child_jnt, q=True, ws=True, t=True)
+            mid_pos = [(p + c) / 2.0 for p, c in zip(parent_pos, child_pos)]
 
-        # Naming
-        base_name = parent_jnt.replace("_Jnt", "")
-        twist_jnt = f"{base_name}_Twist_Jnt"
-        helper_locator = f"{base_name}_Twist_Helper"
+            # Naming - try to make unique
+            base_name = parent_jnt.split('|')[-1].replace("_Jnt", "").replace("_jnt", "")
+            twist_jnt = "{}{}{}".format(base_name, suffix, "")
 
-        # Create the twist joint at the midpoint
-        twist = cmds.duplicate(parent_jnt, name=twist_jnt, po=True)[0]
-        cmds.xform(twist, ws=True, t=mid_pos)
+            # ensure unique name
+            if cmds.objExists(twist_jnt):
+                idx = 1
+                while cmds.objExists("{}{}".format(twist_jnt, idx)):
+                    idx += 1
+                twist_jnt = "{}{}".format(twist_jnt, idx)
 
-        # Create a helper locator at the same position
-        helper = cmds.spaceLocator(name=helper_locator)[0]
-        cmds.xform(helper, ws=True, t=mid_pos)
+            helper_locator = "{}{}".format(base_name, helper_suffix)
+            if cmds.objExists(helper_locator):
+                idx = 1
+                while cmds.objExists("{}{}".format(helper_locator, idx)):
+                    idx += 1
+                helper_locator = "{}{}".format(helper_locator, idx)
 
-        # Constrain the twist joint to follow the arm rotation while staying in place
-        cmds.pointConstraint(parent_jnt, child_jnt, twist, mo=True)  # Maintain position
-        cmds.orientConstraint(parent_jnt, twist, mo=True)  # Follow the parent rotation
+            # Create the twist joint at the midpoint (use joint command to be a proper joint)
+            cmds.select(clear=True)
+            twist = cmds.joint(p=mid_pos, name=twist_jnt)
+            # zero out radius if desired
+            try:
+                cmds.setAttr(twist + ".radius", 0.1)
+            except Exception:
+                pass
 
-        # Create multiplyDivide node for adjustable twist influence
-        mult_node = cmds.shadingNode("multiplyDivide", asUtility=True, name=twist_jnt + "_Mult")
-        cmds.setAttr(mult_node + ".input2X", twist_factor)  # Set rotation influence
+            # Create a helper locator at the same position if requested
+            helper = None
+            if create_helpers:
+                helper = cmds.spaceLocator(name=helper_locator)[0]
+                cmds.xform(helper, ws=True, t=mid_pos)
 
-        # Connect parent joint's rotation to the multiplyDivide node
-        cmds.connectAttr(parent_jnt + ".rotateX", mult_node + ".input1X")
-        cmds.connectAttr(mult_node + ".outputX", twist + ".rotateX")
+            # Constrain the twist joint to follow the arm rotation while staying in place
+            try:
+                # point constraint from parents -> keeps position between parent and child
+                cmds.pointConstraint(parent_jnt, child_jnt, twist, mo=True)
+            except Exception as e:
+                cmds.warning("Point constraint failed for {}: {}".format(twist, e))
+            try:
+                # orient to follow parent orientation
+                cmds.orientConstraint(parent_jnt, twist, mo=True)
+            except Exception as e:
+                cmds.warning("Orient constraint failed for {}: {}".format(twist, e))
 
-        twist_joints.append(twist)
+            # Create multiplyDivide node for adjustable twist influence
+            try:
+                mult_node = cmds.shadingNode("multiplyDivide", asUtility=True, name=twist_jnt + "_Mult")
+                # set influence on the chosen axis
+                cmds.setAttr("{}.input2{}".format(mult_node, axis), float(twist_factor))
+                # connect parent joint's rotation to the multiplyDivide node and then to twist joint rotation
+                cmds.connectAttr("{}.rotate{}".format(parent_jnt, axis), "{}.input1{}".format(mult_node, axis), force=True)
+                cmds.connectAttr("{}.output{}".format(mult_node, axis), "{}.rotate{}".format(twist, axis), force=True)
+            except Exception as e:
+                cmds.warning("MultiplyDivide setup failed for {}: {}".format(twist, e))
 
-        print(f"Created: {twist} at midpoint between {parent_jnt} and {child_jnt}")
+            created.append(twist)
+            cmds.select(clear=True)
+            # maintain created helper in correct position
+            if helper:
+                try:
+                    # optionally parent helper under twist for organization (optional)
+                    pass
+                except Exception:
+                    pass
 
-    return twist_joints
+            print("Created twist joint: {} (between {} and {})".format(twist, parent_jnt, child_jnt))
+    finally:
+        # restore previous selection
+        if prev_sel:
+            cmds.select(prev_sel, r=True)
+        else:
+            cmds.select(clear=True)
+
+    return created
 
 # Example usage: Select RK joints and run the script
 selected_joints = cmds.ls(selection=True)
@@ -57,3 +114,48 @@ if selected_joints:
     create_twist_joints(selected_joints, twist_factor=0.7)  # Adjust twist factor as needed
 else:
     cmds.warning("Select RK joints before running the script.")
+
+def _ui_create_callback(*args):
+    sel = cmds.ls(selection=True, long=True) or []
+    if not sel or len(sel) < 2:
+        cmds.warning("Select at least two RK joints (in chain order).")
+        return
+    twist_factor = cmds.floatSliderGrp("twist_factor_slider", q=True, value=True)
+    axis = cmds.optionMenu("twist_axis_menu", q=True, value=True)
+    create_helpers = cmds.checkBox("twist_helpers_cb", q=True, value=True)
+    create_twist_joints(sel, twist_factor=twist_factor, axis=axis, create_helpers=create_helpers)
+
+def show_twist_ui():
+    win = "twistSetupUI"
+    if cmds.window(win, exists=True):
+        cmds.deleteUI(win)
+    cmds.window(win, title="Twist Setup Tool", widthHeight=(360, 140))
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=6, columnAlign="center")
+
+    cmds.text(label="Select RK joints in chain order, then press Create", align="center")
+
+    cmds.rowLayout(numberOfColumns=2, columnWidth2=(180, 160))
+    cmds.floatSliderGrp("twist_factor_slider", field=True, label="Twist Factor", min=0.0, max=2.0, value=0.5, step=0.01)
+    cmds.optionMenu("twist_axis_menu", label="Axis")
+    cmds.menuItem(label="X")
+    cmds.menuItem(label="Y")
+    cmds.menuItem(label="Z")
+    cmds.setParent("..")
+
+    cmds.rowLayout(numberOfColumns=3, columnWidth3=(120, 120, 120))
+    cmds.checkBox("twist_helpers_cb", label="Create Helpers", value=True)
+    cmds.button(label="Create From Selection", command=_ui_create_callback)
+    cmds.button(label="Refresh Selection", command=lambda *a: cmds.select(cmds.ls(selection=True), r=True))
+    cmds.setParent("..")
+
+    cmds.separator(height=6, style="in")
+    cmds.rowLayout(numberOfColumns=2, columnWidth2=(180, 180))
+    cmds.button(label="Select Joints (in scene)", command=lambda *a: cmds.select(cmds.ls(type='joint'), r=True))
+    cmds.button(label="Close", command=lambda *a: cmds.deleteUI(win, window=True))
+    cmds.setParent("..")
+
+    cmds.showWindow(win)
+
+# Auto-launch UI if run as script
+if __name__ == "__main__":
+    show_twist_ui()
