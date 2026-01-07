@@ -1,157 +1,118 @@
 import maya.cmds as cmds
 import maya.mel as mel
 
-created_joints = []  # Store created joints for hierarchy
-side_option = "None"
-part_option = "Arm"
 
-def create_joints_at_selected(match_rotation=False):
-    """Creates joints at the selected objects' positions with optional rotation matching."""
-    global created_joints
-    selected_objects = cmds.ls(selection=True, type='transform')
+def create_joints_at_clusters(match_rotation=False):
+    """Create joints at selected cluster handle transforms.
 
-    if not selected_objects:
-        cmds.warning("Select at least one object.")
-        return
+    This function looks at the current selection and for each selected transform
+    that has a shape of type 'clusterHandle' it creates a joint at the transform's
+    world position. Optionally it matches rotation as well.
 
-    created_joints = []  # Reset joint list
+    Returns a list of created joint names.
+    """
+    sel = cmds.ls(selection=True, long=True) or []
+    if not sel:
+        cmds.warning("Select one or more cluster handle transforms.")
+        return []
 
-    for obj in selected_objects:
-        cmds.select(clear=True)  # Avoid parenting issues
-        joint = cmds.joint(name=obj + "_Jnt")
-        cmds.matchTransform(joint, obj, position=True, rotation=match_rotation)
-        created_joints.append(joint)
+    created = []
+    for node in sel:
+        node_type = cmds.nodeType(node)
+        transform = node
 
-    cmds.select(created_joints)  # Select newly created joints
-    cmds.inViewMessage(amg="Joints created successfully!", pos='midCenter', fade=True)
+        if node_type != 'transform':
+            parents = cmds.listRelatives(node, parent=True, fullPath=True) or []
+            if not parents:
+                cmds.warning(f"Skipping '{node}': not a transform and no parent found.")
+                continue
+            transform = parents[0]
 
-def rename_joints():
-    """Renames created joints following user-defined naming conventions using MEL."""
-    global created_joints, side_option, part_option
+        shapes = cmds.listRelatives(transform, shapes=True, fullPath=True) or []
+        if not any(cmds.nodeType(s) == 'clusterHandle' for s in shapes):
+            cmds.warning(f"Skipping '{transform}': no cluster handle shape found.")
+            continue
 
-    if not created_joints:
-        cmds.warning("No joints to rename.")
-        return
+        cmds.select(clear=True)
+        j = cmds.joint(name=f"{transform}_Jnt")
+        cmds.matchTransform(j, transform, position=True, rotation=match_rotation)
+        created.append(j)
 
-    prefix = ""
-    if side_option == "Left":
-        prefix = "L_"
-    elif side_option == "Right":
-        prefix = "R_"
+    if created:
+        cmds.select(created)
+        try:
+            cmds.inViewMessage(amg="Joints created at clusters.", pos='midCenter', fade=True)
+        except Exception:
+            pass
+    else:
+        cmds.warning("No joints were created.")
 
-    for i, joint in enumerate(created_joints):
-        new_name = f"{prefix}{part_option}_FK_{i:02d}_Jnt"
-        mel.eval(f'rename "{joint}" "{new_name}"')
-        created_joints[i] = new_name  # Update list with new names
+    return created
 
-    cmds.select(created_joints)
-    cmds.inViewMessage(amg="Joints renamed successfully!", pos='midCenter', fade=True)
 
-def group_and_parent_joints():
-    """Groups and parents joints in proper hierarchy."""
-    global created_joints, side_option, part_option
+def create_joints_at_selected_clusters(match_rotation=False):
+    """Convenience wrapper kept for clarity and backward compatibility."""
+    return create_joints_at_clusters(match_rotation=match_rotation)
 
-    if not created_joints:
-        cmds.warning("No joints to group.")
-        return
 
-    prefix = ""
-    if side_option == "Left":
-        prefix = "L_"
-    elif side_option == "Right":
-        prefix = "R_"
+def create_shelf_button(shelf_name=None, match_rotation=False):
+    """Create a shelf button that runs this tool.
 
-    group_name = f"{prefix}{part_option}_Grp"
+    If `shelf_name` is None, the user will be prompted for a shelf/tab name.
+    The function attempts to create a Python-command shelf button that calls
+    `create_joints_at_selected_clusters`.
+    """
+    if shelf_name is None:
+        res = cmds.promptDialog(
+            title='Shelf name',
+            message='Enter target shelf/tab name:',
+            button=['OK', 'Cancel'],
+            defaultButton='OK',
+            cancelButton='Cancel',
+            dismissString='Cancel')
 
-    if cmds.objExists(group_name):
-        cmds.warning(f"Group {group_name} already exists.")
-        return
+        if res != 'OK':
+            cmds.warning('Shelf creation cancelled.')
+            return None
 
-    # Create group at the position of the first joint
-    top_joint = created_joints[0]
-    group_node = cmds.group(empty=True, name=group_name)
-    cmds.matchTransform(group_node, top_joint, position=True)
-    cmds.parent(top_joint, group_node)  # Parent first joint to the group
+        shelf_name = cmds.promptDialog(query=True, text=True)
 
-    # Parent joints in order
-    for i in range(len(created_joints) - 1):
-        cmds.parent(created_joints[i + 1], created_joints[i])
+    # Build a robust python command string that imports this module and runs the function
+    py_cmd = (
+        "import importlib, sys\n"
+        "from JoinCreateTool import create_joints_at_selected_clusters as _run\n"
+        "_run(match_rotation=%s)" % (True if match_rotation else False)
+    )
 
-    cmds.select(group_node)
-    cmds.inViewMessage(amg="Joints grouped & parented successfully!", pos='midCenter', fade=True)
+    try:
+        cmds.shelfButton(parent=shelf_name,
+                         annotation='Create joints at selected cluster handles',
+                         command=py_cmd,
+                         image='commandButton.png')
+        cmds.inViewMessage(amg='Shelf button created.', pos='midCenter', fade=True)
+    except Exception as e:
+        cmds.warning(f"Failed to create shelf button on '{shelf_name}': {e}\nTry creating the button manually or pass a valid shelf/tab name.")
+        return None
 
-def create_naming_ui():
-    """Creates a UI for renaming settings."""
-    global side_option, part_option
 
-    naming_window = "jointNamingUI"
-    if cmds.window(naming_window, exists=True):
-        cmds.deleteUI(naming_window)
+def show_ui():
+    """Show a small UI to run the cluster->joint tool or add a shelf button."""
+    win = 'joinCreateClusterUI'
+    if cmds.window(win, exists=True):
+        cmds.deleteUI(win)
 
-    cmds.window(naming_window, title="Joint Naming Settings", widthHeight=(300, 140), sizeable=False)
-    cmds.columnLayout(adjustableColumn=True, rowSpacing=10)
+    cmds.window(win, title='Create Joints From Clusters', widthHeight=(320, 120), sizeable=False)
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=8, columnAlign='center')
+    cmds.text(label='Select cluster handle transforms and use the buttons below.')
 
-    cmds.text(label="Select Side:")
-    side_menu = cmds.optionMenu()
-    cmds.menuItem(label="None")
-    cmds.menuItem(label="Left")
-    cmds.menuItem(label="Right")
+    cmds.rowLayout(numberOfColumns=2, adjustableColumn=2)
+    cmds.button(label='Create (Position)', command=lambda *a: create_joints_at_selected_clusters(match_rotation=False), bgc=(0.3, 0.6, 0.3))
+    cmds.button(label='Create (Match Rot)', command=lambda *a: create_joints_at_selected_clusters(match_rotation=True), bgc=(0.3, 0.3, 0.6))
+    cmds.setParent('..')
 
-    cmds.text(label="Select Part:")
-    part_menu = cmds.optionMenu()
-    cmds.menuItem(label="Arm")
-    cmds.menuItem(label="Leg")
-    cmds.menuItem(label="Tail")
-    cmds.menuItem(label="Hand")
-    cmds.menuItem(label="Foot")
+    cmds.button(label='Create Shelf Button...', command=lambda *a: create_shelf_button(), bgc=(0.6, 0.5, 0.2))
+    cmds.showWindow(win)
 
-    def update_options(*args):
-        """Updates global variables based on UI selection."""
-        global side_option, part_option
-        side_option = cmds.optionMenu(side_menu, query=True, value=True)
-        part_option = cmds.optionMenu(part_menu, query=True, value=True)
-        cmds.inViewMessage(amg=f"Naming updated: {side_option}_{part_option}", pos='midCenter', fade=True)
 
-    cmds.button(label="Apply Naming Settings", command=update_options, bgc=(0.5, 0.5, 0.7))
-    cmds.showWindow(naming_window)
-
-def create_main_ui():
-    """Creates the main UI for the joint creation tool."""
-    window_name = "jointCreationUI"
-
-    if cmds.window(window_name, exists=True):
-        cmds.deleteUI(window_name)
-
-    cmds.window(window_name, title="Joint Creation Tool", widthHeight=(300, 250), sizeable=False)
-    cmds.columnLayout(adjustableColumn=True, rowSpacing=10)
-
-    cmds.text(label="Select objects and create joints at their positions.")
-
-    cmds.button(label="Create Joints (Position Only)",
-                command=lambda *args: create_joints_at_selected(match_rotation=False),
-                bgc=(0.3, 0.6, 0.3))
-
-    cmds.button(label="Create Joints (Match Position & Rotation)",
-                command=lambda *args: create_joints_at_selected(match_rotation=True),
-                bgc=(0.3, 0.3, 0.6))
-
-    cmds.separator(height=10, style='in')
-
-    cmds.button(label="Set Joint Naming Convention",
-                command=lambda *args: create_naming_ui(),
-                bgc=(0.5, 0.5, 0.7))
-
-    cmds.button(label="Rename Joints",
-                command=lambda *args: rename_joints(),
-                bgc=(0.6, 0.4, 0.2))
-
-    cmds.separator(height=10, style='in')
-
-    cmds.button(label="Group & Parent Joints (Per Chain)",
-                command=lambda *args: group_and_parent_joints(),
-                bgc=(0.6, 0.3, 0.3))
-
-    cmds.showWindow(window_name)
-
-# Run the UI
-create_main_ui()
+if __name__ == '__main__':
+    show_ui()

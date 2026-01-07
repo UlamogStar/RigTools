@@ -1,0 +1,361 @@
+"""StretchIKTool
+
+This file provides a combined lightweight Maya stretch system tool and a small UI
+for testing. It works in two modes:
+
+- Inside Maya: creates Maya nodes (`distanceBetween`, `multiplyDivide`, `condition`, `blendColors`) and
+  connects them to the provided joints and IK handle. Shows a simple Maya UI for testing.
+- Outside Maya: runs in dry-run mode and prints the operations instead of creating nodes.
+
+Usage inside Maya Script Editor (Python):
+	import StretchIKTool
+	StretchIKTool.show_ui()
+
+Or call directly to create a system:
+	import StretchIKTool
+	StretchIKTool.create_stretch_ik_chain('ikHandle1','joint1','joint2','joint3')
+"""
+
+from __future__ import annotations
+import math
+import logging
+logger = logging.getLogger(__name__)
+
+try:
+	import maya.cmds as cmds
+	IN_MAYA = True
+except Exception:
+	IN_MAYA = False
+
+from functools import partial
+
+
+def _maya(cmd, *args, **kwargs):
+    """Helper: run maya command or print when not in Maya."""
+    if IN_MAYA:
+        return getattr(cmds, cmd)(*args, **kwargs)
+    else:
+        print(f"DRY RUN: cmds.{cmd}(*{args}, **{kwargs})")
+        return None
+
+
+def cleanup_stretch_system(name: str):
+    """Remove all nodes created by a stretch system."""
+    if not IN_MAYA:
+        print(f"DRY RUN: cleanup {name}")
+        return
+    
+    nodes_to_delete = [
+        f"{name}_loc_start_loc",
+        f"{name}_loc_end_loc",
+        f"{name}_distance",
+        f"{name}_md_divide",
+        f"{name}_cond",
+        f"{name}_blend",
+    ]
+    
+    for node in nodes_to_delete:
+        if cmds.objExists(node):
+            try:
+                cmds.delete(node)
+                logger.info(f"Deleted {node}")
+            except Exception as e:
+                logger.warning(f"Could not delete {node}: {e}")
+
+def create_stretch_ik_chain(ik_handle: str, start_jnt: str, mid_jnt: str, end_jnt: str, *, name: str = None, clamp_min: bool = True, add_attr: bool = True):
+    """Create a node-based stretch system for a two-segment IK chain using locators and Maya nodes.
+
+    This creates:
+    - Locators at start and end joints (point-constrained)
+    - distanceBetween node to measure current chain length
+    - multiplyDivide node to compute scale factor (current / rest)
+    - condition node to prevent squash (clamp to 1.0 minimum)
+    - blendColors node to blend between normal and stretched scale
+    - Connects stretch toggle to the IK handle's scaleX (to scale the entire chain)
+
+    Args:
+        ik_handle: IK handle transform to attach the stretch attribute to.
+        start_jnt: root joint of the chain.
+        mid_jnt: middle joint of the chain.
+        end_jnt: end joint of the chain.
+        name: optional base name for created nodes (defaults to '<start>_stretch').
+        clamp_min: if True, prevent squash (minimum scale = 1.0).
+        add_attr: if True, adds a `stretch` float attribute on the IK handle (0..1) to blend stretch.
+
+    Returns:
+        dict: mapping of created node names for convenience.
+    """
+    if name is None:
+        name = f"{start_jnt}_stretch"
+
+    # resolve IK transform
+    ik_transform = ik_handle
+    if IN_MAYA:
+        if cmds.objExists(ik_handle):
+            obj_type = cmds.objectType(ik_handle)
+            # if it's an IK handle shape, get the parent transform
+            if 'ikHandle' in obj_type:
+                parents = cmds.listRelatives(ik_handle, parent=True, fullPath=False) or []
+                if parents:
+                    ik_transform = parents[0]
+
+    created = {}
+
+    # Create locators at start and end joints
+    loc_start = f"{name}_loc_start_loc"
+    loc_end = f"{name}_loc_end_loc"
+    if IN_MAYA:
+        # delete if exists
+        if cmds.objExists(loc_start):
+            cmds.delete(loc_start)
+        if cmds.objExists(loc_end):
+            cmds.delete(loc_end)
+        
+        loc_start = cmds.spaceLocator(name=loc_start)[0]
+        loc_end = cmds.spaceLocator(name=loc_end)[0]
+        
+        # point constrain locators to joints (so they follow)
+        cmds.pointConstraint(start_jnt, loc_start, maintainOffset=False)
+        cmds.pointConstraint(end_jnt, loc_end, maintainOffset=False)
+        
+        logger.info(f"Created locators: {loc_start}, {loc_end}")
+    else:
+        _maya('spaceLocator', name=loc_start)
+        _maya('spaceLocator', name=loc_end)
+    created['locators'] = (loc_start, loc_end)
+
+    # Create distanceBetween node to measure chain length
+    dist_node = f"{name}_distance"
+    if IN_MAYA:
+        if cmds.objExists(dist_node):
+            cmds.delete(dist_node)
+        dist_node = cmds.createNode('distanceBetween', name=dist_node)
+        
+        # connect worldMatrix from both locators
+        cmds.connectAttr(f"{loc_start}.worldMatrix[0]", f"{dist_node}.inMatrix1", force=True)
+        cmds.connectAttr(f"{loc_end}.worldMatrix[0]", f"{dist_node}.inMatrix2", force=True)
+        
+        logger.info(f"Created distanceBetween node: {dist_node}")
+    else:
+        _maya('createNode', 'distanceBetween', name=dist_node)
+    created['distance'] = dist_node
+
+    # Calculate rest length (sum of joint segment distances)
+    def _segment_length(a, b):
+        if IN_MAYA:
+            pa = cmds.xform(a, q=True, ws=True, t=True)
+            pb = cmds.xform(b, q=True, ws=True, t=True)
+            return math.dist(pa, pb)
+        else:
+            return 1.0
+
+    len1 = _segment_length(start_jnt, mid_jnt)
+    len2 = _segment_length(mid_jnt, end_jnt)
+    rest_length = len1 + len2
+    logger.info(f"Rest length: {rest_length} (seg1: {len1}, seg2: {len2})")
+
+    # Create multiplyDivide node: currentDist / restLength = scale factor
+    md_node = f"{name}_md_divide"
+    if IN_MAYA:
+        if cmds.objExists(md_node):
+            cmds.delete(md_node)
+        md_node = cmds.createNode('multiplyDivide', name=md_node)
+        cmds.setAttr(f"{md_node}.operation", 2)  # Divide
+        cmds.connectAttr(f"{dist_node}.distance", f"{md_node}.input1X", force=True)
+        cmds.setAttr(f"{md_node}.input2X", rest_length)
+        logger.info(f"Created multiplyDivide (divide): {md_node}")
+    else:
+        _maya('createNode', 'multiplyDivide', name=md_node)
+    created['md_divide'] = md_node
+
+    # Create condition node to clamp min to 1.0 (prevent squash)
+    cond_node = f"{name}_cond"
+    out_attr = None
+    if IN_MAYA:
+        if cmds.objExists(cond_node):
+            cmds.delete(cond_node)
+        cond_node = cmds.createNode('condition', name=cond_node)
+        
+        # if md.outputX >= 1.0, use md.outputX; else use 1.0
+        cmds.connectAttr(f"{md_node}.outputX", f"{cond_node}.firstTerm", force=True)
+        cmds.setAttr(f"{cond_node}.secondTerm", 1.0)
+        cmds.setAttr(f"{cond_node}.operation", 2)  # Greater than
+        cmds.connectAttr(f"{md_node}.outputX", f"{cond_node}.colorIfTrueR", force=True)
+        cmds.setAttr(f"{cond_node}.colorIfFalseR", 1.0)
+        out_attr = f"{cond_node}.outColorR"
+        logger.info(f"Created condition (clamp min): {cond_node}")
+    else:
+        _maya('createNode', 'condition', name=cond_node)
+        out_attr = f"{cond_node}.outColorR"
+    created['condition'] = cond_node
+
+    # Create blendColors node to blend between no-stretch (1.0) and stretched scale
+    blend_node = f"{name}_blend"
+    if IN_MAYA:
+        if cmds.objExists(blend_node):
+            cmds.delete(blend_node)
+        blend_node = cmds.createNode('blendColors', name=blend_node)
+        
+        # color1 = 1.0 (no stretch), color2 = condition result (stretched)
+        cmds.setAttr(f"{blend_node}.color1R", 1.0)
+        cmds.connectAttr(out_attr, f"{blend_node}.color2R", force=True)
+        logger.info(f"Created blendColors: {blend_node}")
+    else:
+        _maya('createNode', 'blendColors', name=blend_node)
+    created['blend'] = blend_node
+
+    # Add stretch attribute on IK handle to control blend (0 = no stretch, 1 = full stretch)
+    stretch_attr = f"{ik_transform}.stretch"
+    if IN_MAYA and add_attr:
+        if not cmds.attributeQuery('stretch', node=ik_transform, exists=True):
+            cmds.addAttr(ik_transform, longName='stretch', attributeType='double', min=0.0, max=1.0, defaultValue=1.0)
+            cmds.setAttr(f"{ik_transform}.stretch", keyable=True)
+            logger.info(f"Added stretch attribute to {ik_transform}")
+        
+        # connect stretch attribute to blendColors blender
+        cmds.connectAttr(f"{ik_transform}.stretch", f"{blend_node}.blender", force=True)
+    else:
+        if not IN_MAYA:
+            print(f"DRY RUN: create attr {stretch_attr} and connect to {blend_node}.blender")
+    created['stretch_attr'] = stretch_attr
+
+    # Connect blend output to IK handle's scaleX (scales the entire chain)
+    if IN_MAYA:
+        cmds.connectAttr(f"{blend_node}.outputR", f"{ik_transform}.scaleX", force=True)
+        logger.info(f"Connected {blend_node}.outputR to {ik_transform}.scaleX")
+    else:
+        _maya('connectAttr', f"{blend_node}.outputR", f"{ik_transform}.scaleX")
+    created['driven_object'] = ik_transform
+
+    # Store metadata on start joint
+    if IN_MAYA:
+        try:
+            if not cmds.attributeQuery('stretchSystem', node=start_jnt, exists=True):
+                cmds.addAttr(start_jnt, longName='stretchSystem', dataType='string')
+            cmds.setAttr(f"{start_jnt}.stretchSystem", name, type='string')
+        except Exception:
+            pass
+
+    logger.info(f'Created stretch system: {created}')
+    print(f"[StretchIKTool] Successfully created stretch system '{name}' on {ik_transform}")
+    return created
+def create_from_selection(name: str = None):
+	"""Create stretch system from selection: start, mid, end, ik handle."""
+	if not IN_MAYA:
+		print('create_from_selection only works inside Maya.')
+		return
+	sel = cmds.ls(selection=True) or []
+	if len(sel) < 4:
+		raise RuntimeError('Select start, mid, end joints and an IK handle (4 items).')
+	start_jnt, mid_jnt, end_jnt = sel[0:3]
+	ik = sel[3]
+	return create_stretch_ik_chain(ik_handle=ik, start_jnt=start_jnt, mid_jnt=mid_jnt, end_jnt=end_jnt, name=name)
+
+
+### UI functions
+
+
+def _set_field_from_selection(field):
+	sel = cmds.ls(selection=True) or []
+	if not sel:
+		cmds.warning('Select an object first to populate the field.')
+		return
+	cmds.textFieldButtonGrp(field, e=True, text=sel[0])
+
+
+def _create_from_fields(start_f, mid_f, end_f, ik_f, name_f, add_attr_cb, clamp_cb):
+    start = cmds.textFieldButtonGrp(start_f, q=True, text=True)
+    mid = cmds.textFieldButtonGrp(mid_f, q=True, text=True)
+    end = cmds.textFieldButtonGrp(end_f, q=True, text=True)
+    ik = cmds.textFieldButtonGrp(ik_f, q=True, text=True)
+    name = cmds.textFieldGrp(name_f, q=True, text=True)
+    add_attr = cmds.checkBox(add_attr_cb, q=True, value=True)
+    clamp_min = cmds.checkBox(clamp_cb, q=True, value=True)
+
+    if not all([start, mid, end, ik]):
+        cmds.warning('Please fill start, mid, end joints and IK handle fields.')
+        return
+
+    # Validate that objects exist
+    for obj, label in [(start, 'Start Joint'), (mid, 'Mid Joint'), (end, 'End Joint'), (ik, 'IK Handle')]:
+        if not cmds.objExists(obj):
+            cmds.warning(f'{label} "{obj}" does not exist in scene.')
+            return
+
+    try:
+        cmds.undoInfo(openChunk=True)
+        result = create_stretch_ik_chain(ik_handle=ik, start_jnt=start, mid_jnt=mid, end_jnt=end, name=name or None, clamp_min=clamp_min, add_attr=add_attr)
+        cmds.inViewMessage(amg=f"Stretch system created successfully on {ik}", pos='midCenterTop', fade=True)
+    except Exception as e:
+        logger.exception(f'Error creating stretch system: {e}')
+        cmds.warning(f'Error creating stretch system: {e}')
+    finally:
+        cmds.undoInfo(closeChunk=True)
+def _create_from_selection_shortcut(name_f, add_attr_cb, clamp_cb):
+    sel = cmds.ls(selection=True) or []
+    if len(sel) < 4:
+        cmds.warning('Select start, mid, end joints and an IK handle (4 items) before pressing this.')
+        return
+    start, mid, end, ik = sel[0:4]
+    add_attr = cmds.checkBox(add_attr_cb, q=True, value=True)
+    clamp_min = cmds.checkBox(clamp_cb, q=True, value=True)
+    name = cmds.textFieldGrp(name_f, q=True, text=True) or None
+
+    try:
+        cmds.undoInfo(openChunk=True)
+        result = create_stretch_ik_chain(ik_handle=ik, start_jnt=start, mid_jnt=mid, end_jnt=end, name=name, clamp_min=clamp_min, add_attr=add_attr)
+        cmds.inViewMessage(amg=f"Stretch system created on {ik}", pos='midCenterTop', fade=True)
+    except Exception as e:
+        logger.exception(f'Error creating stretch system: {e}')
+        cmds.warning(f'Error creating stretch system: {e}')
+    finally:
+        cmds.undoInfo(closeChunk=True)
+def show_ui():
+	"""Show the Stretch System UI in Maya."""
+	if not IN_MAYA:
+		print('DRY RUN: show_ui only runs inside Maya.')
+		return
+
+	win_name = 'StretchSystemToolWin'
+	if cmds.window(win_name, exists=True):
+		cmds.deleteUI(win_name)
+
+	win = cmds.window(win_name, title='Stretch System Tool', widthHeight=(380, 220))
+	main_col = cmds.columnLayout(adjustableColumn=True, rowSpacing=6, columnAlign='center')
+
+	start_f = cmds.textFieldButtonGrp(label='Start Joint', buttonLabel='From Sel', cw3=[110,180,80])
+	cmds.textFieldButtonGrp(start_f, e=True, bc=partial(_set_field_from_selection, start_f))
+
+	mid_f = cmds.textFieldButtonGrp(label='Mid Joint', buttonLabel='From Sel', cw3=[110,180,80])
+	cmds.textFieldButtonGrp(mid_f, e=True, bc=partial(_set_field_from_selection, mid_f))
+
+	end_f = cmds.textFieldButtonGrp(label='End Joint', buttonLabel='From Sel', cw3=[110,180,80])
+	cmds.textFieldButtonGrp(end_f, e=True, bc=partial(_set_field_from_selection, end_f))
+
+	ik_f = cmds.textFieldButtonGrp(label='IK Handle', buttonLabel='From Sel', cw3=[110,180,80])
+	cmds.textFieldButtonGrp(ik_f, e=True, bc=partial(_set_field_from_selection, ik_f))
+
+	name_f = cmds.textFieldGrp(label='System Name', text='')
+
+	opts_row = cmds.rowLayout(numberOfColumns=2, columnWidth2=[180,180], adjustableColumn=2)
+	add_attr_cb = cmds.checkBox(label='Add Attr on IK', value=True)
+	clamp_cb = cmds.checkBox(label='Clamp Min (no squash)', value=True)
+	cmds.setParent('..')
+
+	cmds.separator(height=8)
+
+	btn_row = cmds.rowLayout(numberOfColumns=3, columnWidth3=[120,120,120], adjustableColumn=2)
+	cmds.button(label='Create From Fields', command=lambda *a: _create_from_fields(start_f, mid_f, end_f, ik_f, name_f, add_attr_cb, clamp_cb))
+	cmds.button(label='Create From Selection', command=lambda *a: _create_from_selection_shortcut(name_f, add_attr_cb, clamp_cb))
+	cmds.button(label='Close', command=lambda *a: cmds.deleteUI(win))
+	cmds.setParent('..')
+
+	cmds.showWindow(win)
+
+
+if __name__ == '__main__':
+	if IN_MAYA:
+		show_ui()
+	else:
+		print('StretchIKTool: run inside Maya. This environment is a dry-run.')
+
