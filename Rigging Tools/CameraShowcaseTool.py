@@ -1,175 +1,146 @@
 import maya.cmds as cmds
 
-# ---------------------------------
-# Utility
-# ---------------------------------
+# ------------------------------------------------------------
+# CONSTANTS
+# ------------------------------------------------------------
+RIG_GRP   = "CameraRig_Grp"
+ORBIT_GRP = "Cam_Orbit_Grp"
+ANIM_GRP  = "Cam_Anim_Grp"
+ROT_GRP   = "Cam_Rot_Grp"
+CAM_NAME  = "Turntable_Cam"
+AIM_LOC   = "Cam_Aim_Loc"
 
-def get_target_data():
-    sel = cmds.ls(sl=True)
-    if not sel:
-        return [0, 0, 0], 10.0
+SLIDERS = {}
+ORBIT_ACCUM = 0.0
 
-    bbox = cmds.exactWorldBoundingBox(sel[0])
+# ------------------------------------------------------------
+# RIG CREATION
+# ------------------------------------------------------------
+def create_camera_rig():
 
-    center = [
-        (bbox[0] + bbox[3]) / 2.0,
-        (bbox[1] + bbox[4]) / 2.0,
-        (bbox[2] + bbox[5]) / 2.0
-    ]
-
-    size = max(
-        bbox[3] - bbox[0],
-        bbox[4] - bbox[1],
-        bbox[5] - bbox[2]
-    )
-
-    return center, size * 1.5
-
-
-def ensure_group(name, parent=None):
-    if cmds.objExists(name):
-        return name
-    grp = cmds.group(em=True, name=name)
-    if parent:
-        cmds.parent(grp, parent)
-    return grp
-
-
-# ---------------------------------
-# Rig Creation
-# ---------------------------------
-
-def add_global_scale_attr(grp):
-    if not cmds.attributeQuery("globalScale", node=grp, exists=True):
-        cmds.addAttr(grp, ln="globalScale", at="double", min=0.001, dv=1)
-        cmds.setAttr(grp + ".globalScale", e=True, keyable=True)
-        for axis in "XYZ":
-            cmds.connectAttr(grp + ".globalScale", grp + ".scale" + axis, f=True)
-
-
-def create_camera():
-    rig_grp = ensure_group("CameraRig_Grp")
-    add_global_scale_attr(rig_grp)
-
-    if cmds.objExists("Turntable_Cam"):
+    if cmds.objExists(RIG_GRP):
+        # Rig already exists — do NOT recreate
         return
 
-    cam, _ = cmds.camera(name="Turntable_Cam")
-    cam_grp = cmds.group(cam, name="Turntable_Cam_Grp")
-    cmds.parent(cam_grp, rig_grp)
+    rig_grp = cmds.group(em=True, name=RIG_GRP)
 
-    cmds.makeIdentity(cam, apply=True, t=1, r=1, s=1, n=0)
+    cmds.addAttr(rig_grp, ln="globalScale", at="double", dv=1, min=0.001)
+    cmds.setAttr(rig_grp + ".globalScale", e=True, keyable=True)
+    for ax in "XYZ":
+        cmds.connectAttr(rig_grp + ".globalScale", f"{rig_grp}.scale{ax}")
 
-    # Lock scale only
-    for attr in ["sx", "sy", "sz"]:
-        cmds.setAttr(cam + "." + attr, lock=True, keyable=False)
+    aim = cmds.spaceLocator(name=AIM_LOC)[0]
+    cmds.parent(aim, rig_grp)
 
+    orbit_grp = cmds.group(em=True, name=ORBIT_GRP, parent=rig_grp)
+    anim_grp  = cmds.group(em=True, name=ANIM_GRP, parent=orbit_grp)
+    rot_grp   = cmds.group(em=True, name=ROT_GRP, parent=anim_grp)
 
-def create_or_move_locator(name, parent, position, rotation):
-    if not cmds.objExists(name):
-        loc = cmds.spaceLocator(name=name)[0]
-        cmds.parent(loc, parent)
-    else:
-        loc = name
+    cam = cmds.camera(name=CAM_NAME)[0]
+    cmds.parent(cam, rot_grp)
 
-    cmds.xform(loc, ws=True, t=position, ro=rotation)
-    return loc
-
-
-def setup_scene():
-    center, distance = get_target_data()
-
-    rig_grp = ensure_group("CameraRig_Grp")
-    create_camera()
-
-    # View locators with explicit rotations
-    create_or_move_locator(
-        "Cam_Front_Loc",
-        rig_grp,
-        [center[0], center[1], center[2] + distance],
-        [0, 0, 0]
+    cmds.aimConstraint(
+        aim,
+        cam,
+        aimVector=(0, 0, -1),
+        upVector=(0, 1, 0),
+        worldUpType="scene"
     )
 
-    create_or_move_locator(
-        "Cam_Back_Loc",
-        rig_grp,
-        [center[0], center[1], center[2] - distance],
-        [0, 180, 0]
-    )
+    # Lock camera scale only
+    for a in ["sx", "sy", "sz"]:
+        cmds.setAttr(cam + "." + a, lock=True, keyable=False)
 
-    create_or_move_locator(
-        "Cam_Right_Loc",
-        rig_grp,
-        [center[0] + distance, center[1], center[2]],
-        [0, 90, 0]
-    )
+    # Hide rotation channels (do NOT lock)
+    for a in ["rx", "ry", "rz"]:
+        cmds.setAttr(cam + "." + a, keyable=False, channelBox=False)
 
-    create_or_move_locator(
-        "Cam_Left_Loc",
-        rig_grp,
-        [center[0] - distance, center[1], center[2]],
-        [0, -90, 0]
-    )
+    # Default orbit radius
+    cmds.setAttr(anim_grp + ".translateZ", 20)
 
+# ------------------------------------------------------------
+# SLIDER CALLBACKS
+# ------------------------------------------------------------
+def set_dolly(val):
+    cmds.setAttr(ANIM_GRP + ".translateZ", val)
 
-# ---------------------------------
-# Snapping Logic
-# ---------------------------------
+def set_truck(val):
+    cmds.setAttr(ANIM_GRP + ".translateX", val)
 
-def snap_camera_to(locator):
-    cam_grp = "Turntable_Cam_Grp"
+def set_pedestal(val):
+    cmds.setAttr(ANIM_GRP + ".translateY", val)
 
-    if not cmds.objExists(cam_grp) or not cmds.objExists(locator):
-        cmds.warning("Camera group or locator missing.")
-        return
+def orbit_drag(val):
+    """Infinite orbit using delta accumulation"""
+    global ORBIT_ACCUM
 
-    # Snap position
-    constraint = cmds.parentConstraint(locator, cam_grp, mo=False)[0]
-    cmds.delete(constraint)
+    ORBIT_ACCUM += val
+    cmds.setAttr(ORBIT_GRP + ".rotateY", ORBIT_ACCUM)
 
-    # Match rotation AFTER snap
-    cmds.matchTransform(
-        cam_grp,
-        locator,
-        pos=False,
-        rot=True,
-        scl=False
-    )
+    # Reset slider back to center
+    cmds.floatSlider(SLIDERS["orbit"], e=True, value=0)
 
+def reset_camera(*_):
+    global ORBIT_ACCUM
+    ORBIT_ACCUM = 0.0
 
-# ---------------------------------
+    cmds.setAttr(ANIM_GRP + ".translate", 0, 0, 20)
+    cmds.setAttr(ORBIT_GRP + ".rotate", 0, 0, 0)
+    cmds.setAttr(ROT_GRP + ".rotate", 0, 0, 0)
+
+    cmds.floatSlider(SLIDERS["dolly"], e=True, value=20)
+    cmds.floatSlider(SLIDERS["truck"], e=True, value=0)
+    cmds.floatSlider(SLIDERS["pedestal"], e=True, value=0)
+    cmds.floatSlider(SLIDERS["orbit"], e=True, value=0)
+
+# ------------------------------------------------------------
 # UI
-# ---------------------------------
+# ------------------------------------------------------------
+def camera_dolly_ui():
 
-def build_ui():
-    win = "CameraViewTool_UI"
+    win = "CameraOrbitUI"
     if cmds.window(win, exists=True):
         cmds.deleteUI(win)
 
-    cmds.window(win, title="Scalable Camera Rig", widthHeight=(260, 300))
-    cmds.columnLayout(adjustableColumn=True, rowSpacing=8)
+    cmds.window(win, title="Camera Orbit / Dolly Controls", widthHeight=(320, 300))
+    cmds.columnLayout(adj=True, rowSpacing=8)
 
-    cmds.button(
-        label="Create / Update Camera Rig",
-        height=36,
-        command=lambda *_: setup_scene()
+    cmds.text(label="Dolly (Radius)")
+    SLIDERS["dolly"] = cmds.floatSlider(
+        min=1, max=300, value=20, step=0.1,
+        dragCommand=set_dolly
     )
 
-    cmds.separator(height=12)
+    cmds.text(label="Truck")
+    SLIDERS["truck"] = cmds.floatSlider(
+        min=-150, max=150, value=0, step=0.1,
+        dragCommand=set_truck
+    )
 
-    cmds.button(label="Front View", command=lambda *_: snap_camera_to("Cam_Front_Loc"))
-    cmds.button(label="Back View",  command=lambda *_: snap_camera_to("Cam_Back_Loc"))
-    cmds.button(label="Left View",  command=lambda *_: snap_camera_to("Cam_Left_Loc"))
-    cmds.button(label="Right View", command=lambda *_: snap_camera_to("Cam_Right_Loc"))
+    cmds.text(label="Pedestal")
+    SLIDERS["pedestal"] = cmds.floatSlider(
+        min=-150, max=150, value=0, step=0.1,
+        dragCommand=set_pedestal
+    )
 
-    cmds.separator(height=12)
-    cmds.text(label="Camera orientation driven by locator rotations")
+    cmds.separator(h=8, style="in")
+
+    cmds.text(label="Orbit (Infinite)")
+    SLIDERS["orbit"] = cmds.floatSlider(
+        min=-10, max=10, value=0, step=0.1,
+        dragCommand=orbit_drag
+    )
+
+    cmds.separator(h=12)
+    cmds.button(label="Reset Camera", height=32, command=reset_camera)
 
     cmds.showWindow(win)
 
+# ------------------------------------------------------------
+# ENTRY POINT
+# ------------------------------------------------------------
+def launch_camera_tool():
+    create_camera_rig()
+    camera_dolly_ui()
 
-# ---------------------------------
-# Run
-# ---------------------------------
-
-build_ui()
+launch_camera_tool()
