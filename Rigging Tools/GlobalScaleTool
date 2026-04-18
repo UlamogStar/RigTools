@@ -1,74 +1,154 @@
 import maya.cmds as cmds
 
-def create_global_scale_attr(control_name):
-    """Creates a global scale attribute on the given control, connects it to scale, and locks & hides the scale attributes."""
-    attr_name = "globalScale"
-    
+
+# ------------------------------------------------------------
+# CORE GLOBAL SCALE LOGIC
+# ------------------------------------------------------------
+
+def remove_global_scale(control_name, skeleton_group=None):
+    """Removes all global scale connections created by this tool."""
+
     if not cmds.objExists(control_name):
-        cmds.warning(f"Control '{control_name}' does not exist.")
         return
-    
-    # Add globalScale attribute if it doesn’t exist
-    if not cmds.attributeQuery(attr_name, node=control_name, exists=True):
-        cmds.addAttr(control_name, ln=attr_name, at="double", dv=1.0, min=1.0, keyable=True)
-    
-    # Connect globalScale to the control’s scale attributes
+
+    # Remove scaleConstraint from skeleton group
+    if skeleton_group and cmds.objExists(skeleton_group):
+        constraints = cmds.listRelatives(
+            skeleton_group, type="scaleConstraint", allDescendents=False
+        ) or []
+        if constraints:
+            cmds.delete(constraints)
+
+    # Disconnect globalScale from control scale + unlock
+    if cmds.attributeQuery("globalScale", node=control_name, exists=True):
+        for axis in ["X", "Y", "Z"]:
+            scale_attr = f"{control_name}.scale{axis}"
+            incoming = cmds.listConnections(scale_attr, source=True, plugs=True) or []
+            for src in incoming:
+                if "globalScale" in src:
+                    try:
+                        cmds.disconnectAttr(src, scale_attr)
+                    except Exception:
+                        pass
+
+            if cmds.getAttr(scale_attr, lock=True):
+                cmds.setAttr(scale_attr, lock=False, keyable=True, channelBox=True)
+
+    # Delete multiplyDivide nodes created by this tool
+    md_nodes = cmds.ls("*_globalScale_md", type="multiplyDivide") or []
+    if md_nodes:
+        cmds.delete(md_nodes)
+
+
+def create_global_scale_attr(control_name):
+    """Creates and connects globalScale on the control."""
+
+    if not cmds.attributeQuery("globalScale", node=control_name, exists=True):
+        cmds.addAttr(
+            control_name,
+            ln="globalScale",
+            at="double",
+            dv=1.0,
+            min=0.001,
+            keyable=True
+        )
+
     for axis in ["X", "Y", "Z"]:
-        cmds.connectAttr(f"{control_name}.{attr_name}", f"{control_name}.scale{axis}", force=True)
-        cmds.setAttr(f"{control_name}.scale{axis}", lock=True, keyable=False, channelBox=False)  # Lock & hide scale
+        cmds.connectAttr(
+            f"{control_name}.globalScale",
+            f"{control_name}.scale{axis}",
+            force=True
+        )
+        cmds.setAttr(
+            f"{control_name}.scale{axis}",
+            lock=True,
+            keyable=False,
+            channelBox=False
+        )
 
-def apply_scale_constraint(control_name, skeleton_group):
-    """Applies a scale constraint from the control to the skeleton main group."""
+
+def apply_global_scale(control_name, skeleton_group):
+    """Full rebuild-safe global scale setup."""
+
     if not cmds.objExists(control_name) or not cmds.objExists(skeleton_group):
-        cmds.warning("Invalid control or skeleton group selected.")
+        cmds.warning("Invalid control or skeleton group.")
         return
-    
-    # Remove existing constraints to avoid duplicates
-    existing_constraints = cmds.listRelatives(skeleton_group, type="scaleConstraint") or []
-    cmds.delete(existing_constraints)
 
-    # Apply a scale constraint
+    # Always clean first
+    remove_global_scale(control_name, skeleton_group)
+
+    # Create control attr
+    create_global_scale_attr(control_name)
+
+    # Scale constraint drives skeleton
     cmds.scaleConstraint(control_name, skeleton_group, maintainOffset=True)
 
-def disable_segment_scale():
-    """Turns off segment scale compensate for all joints in the scene."""
-    joints = cmds.ls(type="joint")
-    for joint in joints:
+    # Disable segment scale compensate on all joints
+    for joint in cmds.ls(type="joint"):
         if cmds.objExists(f"{joint}.segmentScaleCompensate"):
             cmds.setAttr(f"{joint}.segmentScaleCompensate", 0)
 
-def setup_global_scale(control_name, skeleton_group):
-    """Runs the full setup process for global scaling."""
-    create_global_scale_attr(control_name)
-    apply_scale_constraint(control_name, skeleton_group)
-    disable_segment_scale()
-    
-    cmds.confirmDialog(title="Success", message="Global Scale setup applied successfully!", button=["OK"])
+    cmds.confirmDialog(
+        title="Global Scale Applied",
+        message="Global scale rebuilt successfully.\nNew joints are now included.",
+        button=["OK"]
+    )
 
-def open_scale_setup_ui():
-    """Opens a UI to set up global scaling."""
-    if cmds.window("scaleSetupUI", exists=True):
-        cmds.deleteUI("scaleSetupUI")
 
-    window = cmds.window("scaleSetupUI", title="Global Scale Setup", widthHeight=(300, 150))
-    cmds.columnLayout(adjustableColumn=True)
+# CLEAN UI
 
-    cmds.text(label="Select the Control for Global Scale:")
-    control_field = cmds.textFieldButtonGrp("controlField", buttonLabel="Pick Control", 
-                                            bc=lambda: cmds.textFieldButtonGrp("controlField", edit=True, 
-                                            text=cmds.ls(selection=True)[0] if cmds.ls(selection=True) else ""))
+def open_global_scale_ui():
 
-    cmds.text(label="Select the Skeleton Main Group:")
-    skel_field = cmds.textFieldButtonGrp("skeletonField", buttonLabel="Pick Group", 
-                                         bc=lambda: cmds.textFieldButtonGrp("skeletonField", edit=True, 
-                                         text=cmds.ls(selection=True)[0] if cmds.ls(selection=True) else ""))
+    if cmds.window("globalScaleUI", exists=True):
+        cmds.deleteUI("globalScaleUI")
 
-    cmds.button(label="Apply Global Scale", command=lambda _: setup_global_scale(
-        cmds.textFieldButtonGrp("controlField", query=True, text=True),
-        cmds.textFieldButtonGrp("skeletonField", query=True, text=True)
-    ))
+    window = cmds.window(
+        "globalScaleUI",
+        title="Global Scale",
+        widthHeight=(300, 120),
+        sizeable=False
+    )
+
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=8)
+
+    cmds.text(label="Global Scale Setup", align="center", font="boldLabelFont")
+
+    control_field = cmds.textFieldButtonGrp(
+        "gs_controlField",
+        label="Control",
+        buttonLabel="Pick",
+        columnWidth=[(1, 60), (2, 170), (3, 50)],
+        bc=lambda: cmds.textFieldButtonGrp(
+            "gs_controlField",
+            edit=True,
+            text=cmds.ls(sl=True)[0] if cmds.ls(sl=True) else ""
+        )
+    )
+
+    skeleton_field = cmds.textFieldButtonGrp(
+        "gs_skeletonField",
+        label="Skeleton",
+        buttonLabel="Pick",
+        columnWidth=[(1, 60), (2, 170), (3, 50)],
+        bc=lambda: cmds.textFieldButtonGrp(
+            "gs_skeletonField",
+            edit=True,
+            text=cmds.ls(sl=True)[0] if cmds.ls(sl=True) else ""
+        )
+    )
+
+    cmds.separator(height=10, style="in")
+
+    cmds.button(
+        label="Apply / Rebuild Global Scale",
+        height=30,
+        command=lambda _: apply_global_scale(
+            cmds.textFieldButtonGrp("gs_controlField", q=True, text=True),
+            cmds.textFieldButtonGrp("gs_skeletonField", q=True, text=True)
+        )
+    )
 
     cmds.showWindow(window)
 
-# Open UI
-open_scale_setup_ui()
+
+open_global_scale_ui()

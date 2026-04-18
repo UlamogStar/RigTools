@@ -1,81 +1,135 @@
 import maya.cmds as cmds
+import re
 
 def select_joints():
-    """ Selects all objects containing '_Jnt' or '_Jnt_' while excluding those with '_FK_', 'FK_', '_FK', '_IK_', 'IK_', '_IK'. """
+    """ Select all joints except for those labeled as Right, FK, or IK. """
     all_objects = cmds.ls(transforms=True)
     joints_to_select = []
 
     for obj in all_objects:
-        if ("_Jnt" in obj or "_Jnt_" in obj) and not any(exclude in obj for exclude in ["_FK_", "FK_", "_FK", "_IK_", "IK_", "_IK"]):
+        if ("_Jnt" in obj or "_Jnt_" in obj) and not any(exclude in obj for exclude in ["R_", "_FK_", "FK_", "_FK", "_IK_", "IK_", "_IK"]):
             joints_to_select.append(obj)
 
     if joints_to_select:
         cmds.select(joints_to_select)
     else:
-        cmds.warning("No valid joints found matching the criteria.")
+        cmds.warning("No joints found. Make sure joints are named with '_Jnt' and do not include 'R_', '_FK_', or '_IK_' in their names.")
 
-def create_groups_at_selected():
-    selected_objects = cmds.ls(selection=True, type='transform')
-    
-    if not selected_objects:
-        cmds.warning("Select at least one object.")
-        return
-    
-    for obj in selected_objects:
-        grp_name = obj + "_Ctrl_Grp"
-        if cmds.objExists(grp_name):
-            cmds.warning(f"Group {grp_name} already exists. Skipping.")
-            continue
 
-        pos = cmds.xform(obj, query=True, worldSpace=True, translation=True)
-        grp = cmds.group(empty=True, name=grp_name)
-        cmds.xform(grp, worldSpace=True, translation=pos)
-
-def create_controls_at_selected():
+def create_controls_and_groups_at_selected():
+    """Create controls first, then groups; match group to control and parent control under group."""
     selected_objects = cmds.ls(selection=True, type='transform')
 
     if not selected_objects:
         cmds.warning("Select at least one object.")
         return
-    
+    # Ensure scene has a COG and Transform control at world origin
+    COGandTransformControl()
+
     for obj in selected_objects:
-        ctrl_name = obj + "_Ctrl"
-        grp_name = obj + "_Ctrl_Grp"
 
-        if cmds.objExists(ctrl_name):
-            cmds.warning(f"Control {ctrl_name} already exists. Skipping.")
-            continue
-        
-        pos = cmds.xform(obj, query=True, worldSpace=True, translation=True)
-        ctrl = cmds.circle(name=ctrl_name, normal=(0, 1, 0), radius=1)[0]
-        cmds.xform(ctrl, worldSpace=True, translation=pos)
+        ctrl_name, grp_name = make_ctrl_grp_names(obj)
 
-        # Auto-parent control to its group if it exists
-        if cmds.objExists(grp_name):
-            cmds.parent(ctrl, grp_name)
+        # Create control if it doesn't exist
+        if not cmds.objExists(ctrl_name):
+            pos = cmds.xform(obj, query=True, worldSpace=True, translation=True)
+            ctrl = cmds.circle(name=ctrl_name, normal=(0, 1, 0), radius=1)[0]
+            cmds.xform(ctrl, worldSpace=True, translation=pos)
         else:
-            cmds.warning(f"Group {grp_name} does not exist. Control {ctrl_name} remains unparented.")
+            cmds.warning(f"Control {ctrl_name} already exists. Using existing control.")
+            ctrl = ctrl_name
+
+        # Create group if it doesn't exist
+        if not cmds.objExists(grp_name):
+            grp = cmds.group(empty=True, name=grp_name)
+        else:
+            cmds.warning(f"Group {grp_name} already exists. Using existing group.")
+            grp = grp_name
+
+        # Match group's position & rotation to the control
+        pos_ctrl = cmds.xform(ctrl, query=True, worldSpace=True, translation=True)
+        rot_ctrl = cmds.xform(ctrl, query=True, worldSpace=True, rotation=True)
+        cmds.xform(grp, worldSpace=True, translation=pos_ctrl)
+        cmds.xform(grp, worldSpace=True, rotation=rot_ctrl)
+
+        # Parent control under its group
+        try:
+            cmds.parent(ctrl, grp)
+        except Exception as e:
+            cmds.warning(f"Failed to parent {ctrl} under {grp}: {e}")
+
+def make_ctrl_grp_names(obj):
+    # remove occurrences of "_Jnt" (handles "_Jnt" and "_Jnt_"), trim trailing underscores
+    base = obj.replace("_Jnt_", "_").replace("_Jnt", "")
+    base = base.rstrip("_")
+    return f"{base}_Ctrl", f"{base}_Ctrl_Grp"
+
+def COGandTransformControl():
+    # Create COG control at world origin
+    cog_ctrl = "COG_Ctrl"
+    cog_grp = "COG_Ctrl_Grp"
+
+    if not cmds.objExists(cog_ctrl):
+        cog = cmds.circle(name=cog_ctrl, normal=(0, 1, 0), radius=2)[0]
+        cmds.xform(cog, worldSpace=True, translation=(0, 0, 0))
+    else:
+        cog = cog_ctrl
+
+    if not cmds.objExists(cog_grp):
+        grp = cmds.group(empty=True, name=cog_grp)
+    else:
+        grp = cog_grp
+
+    pos_cog = cmds.xform(cog, query=True, worldSpace=True, translation=True)
+    rot_cog = cmds.xform(cog, query=True, worldSpace=True, rotation=True)
+    cmds.xform(grp, worldSpace=True, translation=pos_cog)
+    cmds.xform(grp, worldSpace=True, rotation=rot_cog)
+
+    try:
+        cmds.parent(cog, grp)
+    except Exception:
+        pass
+
+    # Create Transform control at world origin
+    trans_ctrl = "Transform_Ctrl"
+    trans_grp = "Transform_Ctrl_Grp"
+
+    if not cmds.objExists(trans_ctrl):
+        tctrl = cmds.circle(name=trans_ctrl, normal=(1, 0, 0), radius=2)[0]
+        cmds.xform(tctrl, worldSpace=True, translation=(0, 0, 0))
+    else:
+        tctrl = trans_ctrl
+
+    if not cmds.objExists(trans_grp):
+        tgrp = cmds.group(empty=True, name=trans_grp)
+    else:
+        tgrp = trans_grp
+
+    pos_t = cmds.xform(tctrl, query=True, worldSpace=True, translation=True)
+    rot_t = cmds.xform(tctrl, query=True, worldSpace=True, rotation=True)
+    cmds.xform(tgrp, worldSpace=True, translation=pos_t)
+    cmds.xform(tgrp, worldSpace=True, rotation=rot_t)
+
+    try:
+        cmds.parent(tctrl, tgrp)
+    except Exception:
+        pass
 
 def create_ui():
-    if cmds.window("riggingToolUI", exists=True):
-        cmds.deleteUI("riggingToolUI")
+    if cmds.window("RKtoolUI", exists=True):
+        cmds.deleteUI("RKtoolUI")
     
-    window = cmds.window("riggingToolUI", title="Rigging Control Tool", widthHeight=(250, 200))
+    window = cmds.window("RKtoolUI", title="Rigging Control Tool", widthHeight=(250, 200))
     cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
     
     cmds.text(label="Step 1: Select Joints", align="center")
     cmds.button(label="Select Joints (_Jnt, Exclude FK/IK)", command=lambda *args: select_joints())
 
-    cmds.separator(height=5, style="in")
-
-    cmds.text(label="Step 2: Create Groups", align="center")
-    cmds.button(label="Create Groups at Selected", command=lambda *args: create_groups_at_selected())
-
-    cmds.separator(height=5, style="in")
-
-    cmds.text(label="Step 3: Create Controls & Parent", align="center")
+    cmds.text(label="Create Controls & Parent", align="center")
     cmds.button(label="Create Controls at Selected", command=lambda *args: create_controls_at_selected())
+    cmds.button(label="Create Controls + Groups (combined)", command=lambda *args: create_controls_and_groups_at_selected())
 
+    cmds.button(label="Create COG & Transform Controls at Origin", command=lambda *args: COGandTransformControl())
     cmds.separator(height=5, style="in")
     cmds.button(label="Close", command=lambda *args: cmds.deleteUI(window))
 

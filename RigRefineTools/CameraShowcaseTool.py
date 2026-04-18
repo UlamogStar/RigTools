@@ -13,9 +13,7 @@ AIM_LOC   = "Cam_Aim_Loc"
 SLIDERS = {}
 ORBIT_ACCUM = 0.0
 
-# ------------------------------------------------------------
 # RIG CREATION
-# ------------------------------------------------------------
 def create_camera_rig():
 
     if cmds.objExists(RIG_GRP):
@@ -51,16 +49,20 @@ def create_camera_rig():
     for a in ["sx", "sy", "sz"]:
         cmds.setAttr(cam + "." + a, lock=True, keyable=False)
 
-    # Hide rotation channels (do NOT lock)
-    for a in ["rx", "ry", "rz"]:
-        cmds.setAttr(cam + "." + a, keyable=False, channelBox=False)
+    # Make camera transform channels keyable so the rig is animatable via timeline.
+    # Keep scale locked but allow translate/rotate to be keyed if needed.
+    for a in ["translateX", "translateY", "translateZ", "rotateX", "rotateY", "rotateZ"]:
+        cmds.setAttr(cam + "." + a, e=True, keyable=True)
+
+    # Ensure the important group nodes are keyable so you can animate dolly/truck/pedestal/orbit
+    for grp in (orbit_grp, anim_grp, rot_grp):
+        for a in ["translateX", "translateY", "translateZ", "rotateX", "rotateY", "rotateZ"]:
+            cmds.setAttr(grp + "." + a, e=True, keyable=True)
 
     # Default orbit radius
     cmds.setAttr(anim_grp + ".translateZ", 20)
 
-# ------------------------------------------------------------
 # SLIDER CALLBACKS
-# ------------------------------------------------------------
 def set_dolly(val):
     cmds.setAttr(ANIM_GRP + ".translateZ", val)
 
@@ -93,9 +95,7 @@ def reset_camera(*_):
     cmds.floatSlider(SLIDERS["pedestal"], e=True, value=0)
     cmds.floatSlider(SLIDERS["orbit"], e=True, value=0)
 
-# ------------------------------------------------------------
 # UI
-# ------------------------------------------------------------
 def camera_dolly_ui():
 
     win = "CameraOrbitUI"
@@ -136,9 +136,7 @@ def camera_dolly_ui():
 
     cmds.showWindow(win)
 
-# ------------------------------------------------------------
-# ENTRY POINT
-# ------------------------------------------------------------
+
 def launch_camera_tool():
     create_camera_rig()
     camera_dolly_ui()
