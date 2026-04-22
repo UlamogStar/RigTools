@@ -1,155 +1,23 @@
 import maya.cmds as cmds
 
-def searchReplaceNames(find, replace, scope='selected'):
-    if scope == 'selected':
-        nodes = cmds.ls(selection=True, long=True) or []
-    else:
-        nodes = cmds.ls(long=True) or []
-
-    replaced = 0
-    for node in nodes:
-        if find in node:
-            try:
-                new_name = node.replace(find, replace)
-                cmds.rename(node, new_name)
-                replaced += 1
-            except Exception as e:
-                cmds.warning(f"Failed to rename '{node}': {e}")
-
-    cmds.inViewMessage(amg=f'Replaced {replaced} names.', pos='topCenter', fade=True)
-    return replaced
 
 def replaceRKwithFK(*args):
-    sel = cmds.ls(selection=True, long=True) or []
-    if not sel:
-        cmds.warning("Select one or more joints to rename.")
-        return []
-
-    renamed = []
-    for node in sel:
-        if cmds.objectType(node) != 'joint':
-            cmds.warning(f"Skipping '{node}': not a joint.")
-            continue
-        if "_RK_" in node:
-            try:
-                new_name = node.replace("_RK_", "_FK_")
-                renamed_node = cmds.rename(node, new_name)
-                renamed.append(renamed_node)
-            except Exception as e:
-                cmds.warning(f"Failed to rename '{node}': {e}")
-
-    cmds.inViewMessage(amg=f'Renamed {len(renamed)} nodes', pos='topCenter', fade=True)
-    return renamed
+    searchReplaceNames("_RK_", "_FK_", "selected");
 
 def replaceRKwithIK(*args):
-    sel = cmds.ls(selection=True, long=True) or []
-    if not sel:
-        cmds.warning("Select one or more joints to rename.")
-        return []
-
-    renamed = []
-    for node in sel:
-        if cmds.objectType(node) != 'joint':
-            cmds.warning(f"Skipping '{node}': not a joint.")
-            continue
-        if "_RK_" in node:
-            try:
-                new_name = node.replace("_RK_", "_IK_")
-                renamed_node = cmds.rename(node, new_name)
-                renamed.append(renamed_node)
-            except Exception as e:
-                cmds.warning(f"Failed to rename '{node}': {e}")
-
-    cmds.inViewMessage(amg=f'Renamed {len(renamed)} nodes', pos='topCenter', fade=True)
-    return renamed
+    searchReplaceNames("_RK_", "_IK_", "selected");
 
 def replaceFKwithRK(*args):
-    sel = cmds.ls(selection=True, long=True) or []
-    if not sel:
-        cmds.warning("Select one or more joints to rename.")
-        return []
-
-    renamed = []
-    for node in sel:
-        if cmds.objectType(node) != 'joint':
-            cmds.warning(f"Skipping '{node}': not a joint.")
-            continue
-        if "_FK_" in node:
-            try:
-                new_name = node.replace("_FK_", "_RK_")
-                renamed_node = cmds.rename(node, new_name)
-                renamed.append(renamed_node)
-            except Exception as e:
-                cmds.warning(f"Failed to rename '{node}': {e}")
-
-    cmds.inViewMessage(amg=f'Renamed {len(renamed)} nodes', pos='topCenter', fade=True)
-    return renamed
+    searchReplaceNames("_FK_", "_RK_", "selected");
 
 def replaceFKwithIK(*args):
-    sel = cmds.ls(selection=True, long=True) or []
-    if not sel:
-        cmds.warning("Select one or more joints to rename.")
-        return []
-
-    renamed = []
-    for node in sel:
-        if cmds.objectType(node) != 'joint':
-            cmds.warning(f"Skipping '{node}': not a joint.")
-            continue
-        if "_FK_" in node:
-            try:
-                new_name = node.replace("_FK_", "_IK_")
-                renamed_node = cmds.rename(node, new_name)
-                renamed.append(renamed_node)
-            except Exception as e:
-                cmds.warning(f"Failed to rename '{node}': {e}")
-
-    cmds.inViewMessage(amg=f'Renamed {len(renamed)} nodes', pos='topCenter', fade=True)
-    return renamed
+    searchReplaceNames("_FK_", "_IK_", "selected");
 
 def replaceIKwithFK(*args):
-    sel = cmds.ls(selection=True, long=True) or []
-    if not sel:
-        cmds.warning("Select one or more joints to rename.")
-        return []
-
-    renamed = []
-    for node in sel:
-        if cmds.objectType(node) != 'joint':
-            cmds.warning(f"Skipping '{node}': not a joint.")
-            continue
-        if "_IK_" in node:
-            try:
-                new_name = node.replace("_IK_", "_FK_")
-                renamed_node = cmds.rename(node, new_name)
-                renamed.append(renamed_node)
-            except Exception as e:
-                cmds.warning(f"Failed to rename '{node}': {e}")
-
-    cmds.inViewMessage(amg=f'Renamed {len(renamed)} nodes', pos='topCenter', fade=True)
-    return renamed
+    searchReplaceNames("_IK_", "_FK_", "selected");
 
 def replaceIKwithRK(*args):
-    sel = cmds.ls(selection=True, long=True) or []
-    if not sel:
-        cmds.warning("Select one or more joints to rename.")
-        return []
-
-    renamed = []
-    for node in sel:
-        if cmds.objectType(node) != 'joint':
-            cmds.warning(f"Skipping '{node}': not a joint.")
-            continue
-        if "_IK_" in node:
-            try:
-                new_name = node.replace("_IK_", "_RK_")
-                renamed_node = cmds.rename(node, new_name)
-                renamed.append(renamed_node)
-            except Exception as e:
-                cmds.warning(f"Failed to rename '{node}': {e}")
-
-    cmds.inViewMessage(amg=f'Renamed {len(renamed)} nodes', pos='topCenter', fade=True)
-    return renamed
+    searchReplaceNames("_IK_", "_RK_", "selected");
 
 def createUI():
     windowID = "renameJoints"
@@ -164,6 +32,6 @@ def createUI():
     cmds.button(label="IK → FK (joints)", command=replaceIKwithFK)
     cmds.button(label="IK → RK (joints)", command=replaceIKwithRK)
 
-    cmds.showWindow()
+    cmds.showWindow(windowID)
 
 createUI()

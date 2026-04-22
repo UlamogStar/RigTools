@@ -122,7 +122,7 @@ def apply_rgb_to_selection(rgb):
 def create_ui():
     if cmds.window(WINDOW, exists=True):
         cmds.deleteUI(WINDOW, window=True)
-    cmds.window(WINDOW, title="Color To Curve", widthHeight=(240, 120), sizeable=False)
+    cmds.window(WINDOW, title="Color To Curve", widthHeight=(240, 120), sizeable=True)
     cmds.columnLayout(adjustableColumn=True, rowSpacing=8)
 
     cmds.button(label="Enable Color Override (selection)", height=36, command=lambda *a: enable_color_override_on_selection())

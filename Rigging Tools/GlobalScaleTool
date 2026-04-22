@@ -5,6 +5,36 @@ import maya.cmds as cmds
 # CORE GLOBAL SCALE LOGIC
 # ------------------------------------------------------------
 
+def find_ik_spline_curves(skeleton_group):
+    """Find all curves driving IK Spline setups under skeleton_group via pointOnCurveInfo."""
+    curves = set()
+    if not cmds.objExists(skeleton_group):
+        return list(curves)
+    
+    # Find all pointOnCurveInfo nodes under skeleton group
+    poc_nodes = cmds.ls(
+        f"{skeleton_group}/*",
+        type="pointOnCurveInfo",
+        allDescendents=True
+    ) or []
+    
+    for poc in poc_nodes:
+        # Get the curve connected to this pointOnCurveInfo
+        curve_conns = cmds.listConnections(
+            f"{poc}.inputCurve",
+            source=True,
+            destination=False,
+            plugs=False
+        ) or []
+        for curve_shape in curve_conns:
+            # Get the transform parent of the curve shape
+            curve_transform = cmds.listRelatives(curve_shape, parent=True, fullPath=True) or []
+            if curve_transform:
+                curves.add(curve_transform[0])
+    
+    return list(curves)
+
+
 def remove_global_scale(control_name, skeleton_group=None):
     """Removes all global scale connections created by this tool."""
 
@@ -67,8 +97,35 @@ def create_global_scale_attr(control_name):
         )
 
 
+def find_ik_spline_curves(skeleton_group):
+    """Find all curves driving IK Spline setups via pointOnCurveInfo."""
+    curves = set()
+    if not cmds.objExists(skeleton_group):
+        return list(curves)
+    
+    poc_nodes = cmds.ls(
+        f"{skeleton_group}/*",
+        type="pointOnCurveInfo",
+        allDescendents=True
+    ) or []
+    
+    for poc in poc_nodes:
+        curve_conns = cmds.listConnections(
+            f"{poc}.inputCurve",
+            source=True,
+            destination=False,
+            plugs=False
+        ) or []
+        for curve_shape in curve_conns:
+            curve_transform = cmds.listRelatives(curve_shape, parent=True, fullPath=True) or []
+            if curve_transform:
+                curves.add(curve_transform[0])
+    
+    return list(curves)
+
+
 def apply_global_scale(control_name, skeleton_group):
-    """Full rebuild-safe global scale setup."""
+    """Full rebuild-safe global scale setup including IK Spline curves."""
 
     if not cmds.objExists(control_name) or not cmds.objExists(skeleton_group):
         cmds.warning("Invalid control or skeleton group.")
@@ -82,15 +139,27 @@ def apply_global_scale(control_name, skeleton_group):
 
     # Scale constraint drives skeleton
     cmds.scaleConstraint(control_name, skeleton_group, maintainOffset=True)
+    
+    # Find and scale IK Spline curves
+    ik_spline_curves = find_ik_spline_curves(skeleton_group)
+    for curve in ik_spline_curves:
+        if cmds.objExists(curve):
+            try:
+                cmds.scaleConstraint(control_name, curve, maintainOffset=True)
+            except Exception as e:
+                cmds.warning(f"Could not apply scale to IK Spline curve {curve}: {e}")
 
     # Disable segment scale compensate on all joints
     for joint in cmds.ls(type="joint"):
         if cmds.objExists(f"{joint}.segmentScaleCompensate"):
             cmds.setAttr(f"{joint}.segmentScaleCompensate", 0)
 
+    ik_spline_count = len(ik_spline_curves)
+    spline_msg = f"\n{ik_spline_count} IK Spline curve(s) scaled." if ik_spline_count > 0 else ""
+    
     cmds.confirmDialog(
         title="Global Scale Applied",
-        message="Global scale rebuilt successfully.\nNew joints are now included.",
+        message=f"Global scale rebuilt successfully.\nNew joints are now included.{spline_msg}",
         button=["OK"]
     )
 

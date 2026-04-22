@@ -47,7 +47,7 @@ def createUI():
     cmds.button(label="Rename FK Joints", command=renameFKJoints)
     cmds.button(label="Rename IK Joints", command=renameIKJoints)
     cmds.button(label="Rename RK Joints", command=renameRKJoints)
-    cmds.showWindow()
+    cmds.showWindow(windowID)
 
 createUI()
 

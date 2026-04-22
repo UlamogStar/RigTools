@@ -2,8 +2,8 @@ import maya.cmds as cmds
 import re
 
 CONTROL = "COG_Ctrl"
-SWITCH_ATTR = "RK_Switch"
-WIN = 'rkSwitchUI'
+SWITCH_ATTR = "IKFK"
+WIN = 'RK Setup'
 
 def ensure_switch_attr():
     if not cmds.objExists(CONTROL):
@@ -37,6 +37,7 @@ def _apply_parent_constraint(ik, fk, rk, maintain_offset=True):
     if existing:
         cmds.delete(existing)
     cns = cmds.parentConstraint(ik, fk, rk, mo=maintain_offset)[0]
+    # by default connect the UI switch to the constraint weights
     _weight_connect(cns, rk)
 
 def _derive_pair_names_from_rk(rk_name):
@@ -85,7 +86,7 @@ def update_ikfk_switch():
     for ctrl in fk_controls:
         if cmds.objExists(ctrl): cmds.setAttr(ctrl + ".visibility", fk_visibility)
 
-def _apply_by_sides_limbs(maintain_offset=True):
+def _apply_by_sides_limbs(maintain_offset=True, ignore_ik=False):
     sides = ['L', 'R']
     limb_selection = cmds.checkBoxGrp('limbSelection', query=True, valueArray3=True)
     limbs = []
@@ -105,7 +106,7 @@ def _apply_by_sides_limbs(maintain_offset=True):
             for ik, fk, rk in zip(ik_joints, fk_joints, rk_joints):
                 _apply_parent_constraint(ik, fk, rk, maintain_offset)
 
-def _apply_by_auto_match(maintain_offset=True):
+def _apply_by_auto_match(maintain_offset=True, ignore_ik=False):
     triplets = _gather_all_rk_triplets()
     for ik, fk, rk in triplets:
         _apply_parent_constraint(ik, fk, rk, maintain_offset)
@@ -113,37 +114,69 @@ def _apply_by_auto_match(maintain_offset=True):
 def create_rk_switch():
     if not ensure_switch_attr():
         return
-    maintain_offset = cmds.checkBox('rk_mo', q=True, v=True)
-    auto_match = cmds.checkBox('rk_auto', q=True, v=True)
+    # safe queries in case UI elements are missing
+    maintain_offset = cmds.checkBox('rk_mo', q=True, v=True) if cmds.objExists('rk_mo') else True
+    auto_match = cmds.checkBox('rk_auto', q=True, v=True) if cmds.objExists('rk_auto') else True
+    ignore_ik = cmds.checkBox('rk_ignore_ik', q=True, v=True) if cmds.objExists('rk_ignore_ik') else False
     if auto_match:
-        _apply_by_auto_match(maintain_offset)
+        _apply_by_auto_match(maintain_offset, ignore_ik)
     else:
-        _apply_by_sides_limbs(maintain_offset)
+        _apply_by_sides_limbs(maintain_offset, ignore_ik)
     print("RK system setup complete.")
+
+
+def _safe_callback(func, *args, **kwargs):
+    try:
+        return func(*args, **kwargs)
+    except Exception as e:
+        try:
+            cmds.warning('Callback error: {}'.format(e))
+        except:
+            print('Callback error: {}'.format(e))
 
 def create_rk_switch_ui():
     if cmds.window(WIN, exists=True):
         cmds.deleteUI(WIN, window=True)
-    cmds.window(WIN, title='RK Switch UI', widthHeight=(300, 240), sizeable=False)
-    cmds.columnLayout(adjustableColumn=True)
+    win = cmds.window(WIN, title='RK Switch UI', widthHeight=(300, 240), sizeable=False)
+    try:
+        cmds.columnLayout(adjustableColumn=True)
 
-    cmds.floatSliderGrp('ikfkSwitchSlider', label='IKFK Switch', field=True,
-                        minValue=0, maxValue=1, value=0, step=0.1, cc='update_ikfk_switch()')
+        cmds.floatSliderGrp('ikfkSwitchSlider', label='IKFK Switch', field=True,
+                            minValue=0, maxValue=1, value=0, step=0.1, cc=lambda *a: _safe_callback(update_ikfk_switch))
 
-    cmds.separator(h=6, style='none')
-    cmds.text(label='Apply Mode:')
+        cmds.separator(h=6, style='none')
+        cmds.text(label='Apply Mode:')
 
-    cmds.checkBox('rk_auto', label='Auto-match all RK by name (replace _RK_ -> _IK_/_FK_)', v=True)
-    cmds.checkBox('rk_mo', label='Maintain Offset', v=True)
+        cmds.checkBox('rk_auto', label='Auto-match all RK by name (replace _RK_ -> _IK_/_FK_)', v=True)
+        cmds.checkBox('rk_mo', label='Maintain Offset', v=True)
 
-    cmds.frameLayout(label='Manual (sides/limbs) when Auto-match is OFF', collapsable=True, collapse=False, mw=6, mh=6)
-    cmds.checkBoxGrp('limbSelection', numberOfCheckBoxes=3,
-                     labelArray3=['Foot', 'Leg', 'Arm'], valueArray3=[True, True, True])
-    cmds.setParent('..')
+        cmds.frameLayout(label='Manual (sides/limbs) when Auto-match is OFF', collapsable=True, collapse=False, mw=6, mh=6)
+        cmds.checkBoxGrp('limbSelection', numberOfCheckBoxes=3,
+                         labelArray3=['Foot', 'Leg', 'Arm'], valueArray3=[True, True, True])
+        cmds.setParent('..')
 
-    cmds.separator(h=6, style='none')
-    cmds.button(label='Apply RK Setup', command='create_rk_switch()')
+        cmds.separator(h=6, style='none')
+        cmds.button(label='Apply RK Setup', command=lambda *a: _safe_callback(create_rk_switch))
 
-    cmds.showWindow(WIN)
+    except Exception as e:
+        try:
+            if cmds.window(win, exists=True):
+                cmds.deleteUI(win, window=True)
+        except:
+            pass
+        try:
+            cmds.warning('Failed to build RK Setup UI: {}'.format(e))
+        except:
+            print('Failed to build RK Setup UI: {}'.format(e))
+        return
+
+    try:
+        cmds.showWindow(win)
+    except Exception as e:
+        try:
+            cmds.warning('No window to show: {}'.format(e))
+        except:
+            print('No window to show: {}'.format(e))
+
 
 create_rk_switch_ui()
